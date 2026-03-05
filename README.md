@@ -1,2 +1,2 @@
 # ullav-dam-server
-A Digital Asset Management SERVR
+A Digital Asset Management Server
