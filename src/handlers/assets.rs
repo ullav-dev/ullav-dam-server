@@ -371,9 +371,11 @@ struct UploadAssetForm {
     keywords: Option<String>,
     creator: Option<String>,
     copyright_notice: Option<String>,
-    /// Defaults to `true` if omitted
+    /// Whether the asset is publicly available (`"true"` or `"false"`). Defaults to `"true"` if omitted.
+    #[schema(example = "true")]
     available: Option<String>,
-    /// ISO 8601 datetime, e.g. `2026-12-31T00:00:00Z`
+    /// Expiry datetime in ISO 8601 format.
+    #[schema(format = DateTime, example = "2026-12-31T00:00:00Z")]
     available_until: Option<String>,
 }
 
