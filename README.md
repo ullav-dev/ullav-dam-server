@@ -68,6 +68,7 @@ The raw OpenAPI JSON spec is at `http://localhost:8080/api-doc/openapi.json`.
 | DELETE | `/assets/:id` | Delete asset and remove from storage |
 | POST | `/assets/:id/upload` | Upload file for an existing asset |
 | GET | `/assets/:id/download` | Download asset file |
+| GET | `/assets/:id/thumbnail` | Get resized thumbnail (PNG or SVG fallback) |
 | POST | `/assets/:asset_id/categories/:category_id` | Add category to asset |
 | DELETE | `/assets/:asset_id/categories/:category_id` | Remove category from asset |
 | GET | `/categories` | List all categories |
@@ -85,7 +86,13 @@ The raw OpenAPI JSON spec is at `http://localhost:8080/api-doc/openapi.json`.
 | `file` | yes | The file to upload |
 | `name` | no | Asset name — defaults to the filename |
 | `asset_type` | no | MIME type — inferred from file extension if omitted |
-| `description` | no | Optional description |
+| `description` | no | Free-text description |
+| `caption` | no | Display caption |
+| `keywords` | no | Comma-separated keywords |
+| `creator` | no | Author / creator name |
+| `copyright_notice` | no | Copyright string |
+| `available` | no | `true` or `false` (default `true`) |
+| `available_until` | no | ISO 8601 datetime after which the asset is unavailable |
 
 ```bash
 curl -X POST http://localhost:8080/assets/upload \
@@ -95,7 +102,7 @@ curl -X POST http://localhost:8080/assets/upload \
 
 ## Data Model
 
-- **Asset** — `id`, `name`, `description`, `asset_type`, `size` (bytes), `storage_key`, `bucket`, timestamps
+- **Asset** — `id`, `name`, `description`, `asset_type`, `size` (bytes), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default `true`), `available_until` (nullable timestamptz), timestamps
 - **Category** — `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), timestamps
 - **asset_categories** — M2M junction table linking assets to categories
 
@@ -111,3 +118,4 @@ curl -X POST http://localhost:8080/assets/upload \
 | `S3_REGION` | no | `us-east-1` | S3 region |
 | `HOST` | no | `0.0.0.0` | Bind host |
 | `PORT` | no | `8080` | Bind port |
+| `THUMBNAIL_SIZE` | no | `256` | Max width/height of generated thumbnails (px) |

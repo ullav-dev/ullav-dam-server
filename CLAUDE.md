@@ -12,6 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Storage:** aws-sdk-s3 against a MinIO instance (path-style, S3-compatible)
 - **Runtime:** Tokio
 - **API Docs:** utoipa + Swagger UI (served at `/docs`, spec at `/api-doc/openapi.json`)
+- **Image processing:** `image` crate (thumbnail generation)
+- **MIME inference:** `mime_guess` (file extension → MIME type)
 
 ## Commands
 
@@ -39,24 +41,26 @@ docker run -d --name minio -p 9000:9000 -p 9001:9001 \
 
 ```
 src/
-  main.rs          – AppState assembly, axum Router (incl. SwaggerUi), ApiDoc, server startup
-  config.rs        – Config loaded from env vars
-  db.rs            – deadpool-postgres pool creation + migration runner
+  main.rs          – AppState (db, storage, thumbnail_cache, thumbnail_size), ThumbnailCache type,
+                     axum Router (incl. SwaggerUi), ApiDoc, server startup
+  config.rs        – Config loaded from env vars (incl. THUMBNAIL_SIZE)
+  db.rs            – deadpool-postgres pool creation + migration runner (runs all migrations in order)
   storage.rs       – StorageClient wrapping aws-sdk-s3 (upload/download/delete/presign)
   error.rs         – AppError enum, ErrorResponse schema, impl IntoResponse
   models/
     asset.rs       – Asset, AssetWithCategories, CreateAssetRequest, UpdateAssetRequest
     category.rs    – Category, CategoryWithChildren, CreateCategoryRequest, UpdateCategoryRequest
   handlers/
-    assets.rs      – CRUD + file upload/download + category membership endpoints
+    assets.rs      – CRUD + file upload/download + category membership + thumbnail endpoints
     categories.rs  – CRUD endpoints for categories
 migrations/
   001_initial.sql  – Schema: assets, categories (self-ref parent_id), asset_categories (M2M)
+  002_asset_metadata_fields.sql – Adds caption, keywords, creator, copyright_notice, available, available_until
 ```
 
 ## Data Model
 
-- **Asset** – `id`, `name`, `description`, `asset_type`, `size` (bytes, BIGINT), `storage_key`, `bucket`, timestamps
+- **Asset** – `id`, `name`, `description`, `asset_type`, `size` (bytes, BIGINT), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default true), `available_until` (nullable timestamptz), timestamps
 - **Category** – `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), timestamps
 - **asset_categories** – M2M junction table (asset_id, category_id)
 
@@ -72,6 +76,7 @@ migrations/
 | DELETE | `/assets/:id` | Delete asset + remove from storage |
 | POST | `/assets/:id/upload` | Upload file for an existing asset |
 | GET | `/assets/:id/download` | Download file bytes |
+| GET | `/assets/:id/thumbnail` | Get resized thumbnail (PNG) or SVG fallback icon |
 | POST | `/assets/:asset_id/categories/:category_id` | Add category to asset |
 | DELETE | `/assets/:asset_id/categories/:category_id` | Remove category from asset |
 | GET | `/categories` | List all categories |
@@ -93,4 +98,5 @@ migrations/
 - Asset upload flows:
   - Two-step: `POST /assets` creates record with a `pending/` storage key → `POST /assets/:id/upload` uploads file and updates `storage_key` + `size`.
   - One-step: `POST /assets/upload` accepts multipart with `file`, optional `name` (defaults to filename), optional `asset_type` (inferred from extension via `mime_guess`), optional `description`. Uploads to S3 first, then inserts DB record.
+- Thumbnail generation: `GET /assets/:id/thumbnail` checks the in-memory `ThumbnailCache` first (read lock), downloads from S3 on miss, decodes + resizes with `image` crate inside `spawn_blocking` (keeps async runtime unblocked), writes result (write lock), and returns PNG with `Cache-Control: public, max-age=86400`. Non-raster types and pending assets return type-appropriate SVG fallback icons instead of errors.
 - Branch policy: all development happens on `claude-work`; do not commit to `main`.
