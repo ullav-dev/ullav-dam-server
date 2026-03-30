@@ -40,6 +40,7 @@ pub struct AppState {
         handlers::assets::download_asset,
         handlers::assets::update_asset,
         handlers::assets::delete_asset,
+        handlers::assets::create_and_upload_asset,
         handlers::assets::add_category_to_asset,
         handlers::assets::remove_category_from_asset,
         handlers::categories::list_categories,
@@ -99,6 +100,7 @@ async fn main() -> Result<()> {
                 .put(handlers::assets::update_asset)
                 .delete(handlers::assets::delete_asset),
         )
+        .route("/assets/upload", post(handlers::assets::create_and_upload_asset))
         .route("/assets/:id/upload", post(handlers::assets::upload_asset))
         .route("/assets/:id/download", get(handlers::assets::download_asset))
         .route(

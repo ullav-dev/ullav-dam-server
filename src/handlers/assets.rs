@@ -326,6 +326,100 @@ pub async fn delete_asset(
     Ok(StatusCode::NO_CONTENT)
 }
 
+// ── Create asset + upload file in one request ─────────────────────────────────
+
+#[utoipa::path(
+    post,
+    path = "/assets/upload",
+    tag = "assets",
+    request_body(
+        content = Vec<u8>,
+        content_type = "multipart/form-data",
+        description = "Multipart form with fields: `name` (text), `asset_type` (text), `description` (text, optional), `file` (file)"
+    ),
+    responses(
+        (status = 201, description = "Asset created and file uploaded", body = Asset),
+        (status = 400, description = "Missing required field or invalid data", body = ErrorResponse),
+    )
+)]
+pub async fn create_and_upload_asset(
+    State(state): State<AppState>,
+    mut multipart: Multipart,
+) -> AppResult<(StatusCode, Json<Asset>)> {
+    let mut name: Option<String> = None;
+    let mut description: Option<String> = None;
+    let mut asset_type: Option<String> = None;
+    let mut file_data: Option<bytes::Bytes> = None;
+    let mut file_name: Option<String> = None;
+    let mut content_type_hdr = "application/octet-stream".to_string();
+
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| AppError::BadRequest(e.to_string()))?
+    {
+        match field.name() {
+            Some("name") => {
+                name = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+            }
+            Some("description") => {
+                let v = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+                if !v.is_empty() {
+                    description = Some(v);
+                }
+            }
+            Some("asset_type") => {
+                asset_type = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+            }
+            _ => {
+                // Treat any other field (including unnamed fields) as the file
+                content_type_hdr = field
+                    .content_type()
+                    .unwrap_or("application/octet-stream")
+                    .to_string();
+                file_name = field.file_name().map(|s| s.to_string());
+                file_data = Some(
+                    field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?,
+                );
+            }
+        }
+    }
+
+    let name = name.ok_or_else(|| AppError::BadRequest("Missing 'name' field".into()))?;
+    let asset_type =
+        asset_type.ok_or_else(|| AppError::BadRequest("Missing 'asset_type' field".into()))?;
+    let file_data =
+        file_data.ok_or_else(|| AppError::BadRequest("Missing file field".into()))?;
+
+    let asset_id = Uuid::new_v4();
+    let resolved_name = file_name.unwrap_or_else(|| asset_id.to_string());
+    let storage_key = format!("assets/{}/{}", asset_id, resolved_name);
+    let size = file_data.len() as i64;
+
+    // Upload first; on failure nothing is written to the DB
+    state.storage.upload(&storage_key, file_data, &content_type_hdr).await?;
+
+    let client = state.db.get().await?;
+    let row = client
+        .query_one(
+            "INSERT INTO assets (id, name, description, asset_type, size, storage_key, bucket)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             RETURNING id, name, description, asset_type, size, storage_key, bucket, created_at, updated_at",
+            &[
+                &asset_id,
+                &name,
+                &description,
+                &asset_type,
+                &size,
+                &storage_key,
+                &state.storage.bucket,
+            ],
+        )
+        .await?;
+
+    Ok((StatusCode::CREATED, Json(Asset::from(&row))))
+}
+
 // ── Category membership ───────────────────────────────────────────────────────
 
 #[utoipa::path(
