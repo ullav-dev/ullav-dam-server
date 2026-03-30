@@ -11,6 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Database:** tokio-postgres + deadpool-postgres (native SQL, no ORM)
 - **Storage:** aws-sdk-s3 against a MinIO instance (path-style, S3-compatible)
 - **Runtime:** Tokio
+- **API Docs:** utoipa + Swagger UI (served at `/docs`, spec at `/api-doc/openapi.json`)
 
 ## Commands
 
@@ -27,15 +28,22 @@ Copy `.env.example` to `.env` and fill in values before running.
 
 Migrations run automatically on startup via `db::run_migrations` (idempotent `CREATE TABLE IF NOT EXISTS`).
 
+MinIO can be started with Docker:
+```bash
+docker run -d --name minio -p 9000:9000 -p 9001:9001 \
+  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+  minio/minio server /data --console-address ":9001"
+```
+
 ## Architecture
 
 ```
 src/
-  main.rs          – AppState assembly, axum Router, server startup
+  main.rs          – AppState assembly, axum Router (incl. SwaggerUi), ApiDoc, server startup
   config.rs        – Config loaded from env vars
   db.rs            – deadpool-postgres pool creation + migration runner
   storage.rs       – StorageClient wrapping aws-sdk-s3 (upload/download/delete/presign)
-  error.rs         – AppError enum, impl IntoResponse (maps to HTTP status codes)
+  error.rs         – AppError enum, ErrorResponse schema, impl IntoResponse
   models/
     asset.rs       – Asset, AssetWithCategories, CreateAssetRequest, UpdateAssetRequest
     category.rs    – Category, CategoryWithChildren, CreateCategoryRequest, UpdateCategoryRequest
@@ -58,10 +66,11 @@ migrations/
 |--------|------|-------------|
 | GET | `/assets` | List all assets |
 | POST | `/assets` | Create asset record (metadata only) |
+| POST | `/assets/upload` | Create asset + upload file in one multipart request |
 | GET | `/assets/:id` | Get asset + its categories |
 | PUT | `/assets/:id` | Update asset metadata |
 | DELETE | `/assets/:id` | Delete asset + remove from storage |
-| POST | `/assets/:id/upload` | Upload file via multipart form |
+| POST | `/assets/:id/upload` | Upload file for an existing asset |
 | GET | `/assets/:id/download` | Download file bytes |
 | POST | `/assets/:asset_id/categories/:category_id` | Add category to asset |
 | DELETE | `/assets/:asset_id/categories/:category_id` | Remove category from asset |
@@ -70,10 +79,18 @@ migrations/
 | GET | `/categories/:id` | Get category + direct sub-categories |
 | PUT | `/categories/:id` | Update category |
 | DELETE | `/categories/:id` | Delete category |
+| GET | `/docs` | Swagger UI |
+| GET | `/api-doc/openapi.json` | OpenAPI 3.0 spec |
 
 ## Key Patterns
 
 - All handlers take `State(state): State<AppState>` — clone is cheap (Arc-backed pool + S3 client).
 - Database rows are converted to model structs via `impl From<&Row> for T`.
 - `AppError` implements `IntoResponse`; handlers return `AppResult<T>` (alias for `Result<T, AppError>`).
-- Asset upload flow: `POST /assets` creates the record with a `pending/` storage key, then `POST /assets/:id/upload` streams the file to MinIO and updates `storage_key` + `size`.
+- `ErrorResponse` in `error.rs` is the shared OpenAPI schema for all error response bodies.
+- All model structs and request/response types derive `ToSchema` for OpenAPI generation.
+- Handler functions carry `#[utoipa::path(...)]` annotations; `ApiDoc` in `main.rs` aggregates them.
+- Asset upload flows:
+  - Two-step: `POST /assets` creates record with a `pending/` storage key → `POST /assets/:id/upload` uploads file and updates `storage_key` + `size`.
+  - One-step: `POST /assets/upload` accepts multipart with `file`, optional `name` (defaults to filename), optional `asset_type` (inferred from extension via `mime_guess`), optional `description`. Uploads to S3 first, then inserts DB record.
+- Branch policy: all development happens on `claude-work`; do not commit to `main`.
