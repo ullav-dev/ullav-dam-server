@@ -1,9 +1,10 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::Row;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Category {
     pub id: Uuid,
     pub name: String,
@@ -26,21 +27,21 @@ impl From<&Row> for Category {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct CategoryWithChildren {
     #[serde(flatten)]
     pub category: Category,
     pub sub_categories: Vec<Category>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateCategoryRequest {
     pub name: String,
     pub description: Option<String>,
     pub parent_id: Option<Uuid>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateCategoryRequest {
     pub name: Option<String>,
     pub description: Option<String>,

@@ -5,6 +5,8 @@ use axum::{
 };
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use utoipa::OpenApi;
+use utoipa_swagger_ui::SwaggerUi;
 
 mod config;
 mod db;
@@ -22,6 +24,47 @@ pub struct AppState {
     pub db: DbPool,
     pub storage: StorageClient,
 }
+
+#[derive(OpenApi)]
+#[openapi(
+    info(
+        title = "DAM Server API",
+        version = "0.1.0",
+        description = "Digital Asset Management HTTP API"
+    ),
+    paths(
+        handlers::assets::list_assets,
+        handlers::assets::get_asset,
+        handlers::assets::create_asset,
+        handlers::assets::upload_asset,
+        handlers::assets::download_asset,
+        handlers::assets::update_asset,
+        handlers::assets::delete_asset,
+        handlers::assets::add_category_to_asset,
+        handlers::assets::remove_category_from_asset,
+        handlers::categories::list_categories,
+        handlers::categories::get_category,
+        handlers::categories::create_category,
+        handlers::categories::update_category,
+        handlers::categories::delete_category,
+    ),
+    components(schemas(
+        models::asset::Asset,
+        models::asset::AssetWithCategories,
+        models::asset::CreateAssetRequest,
+        models::asset::UpdateAssetRequest,
+        models::category::Category,
+        models::category::CategoryWithChildren,
+        models::category::CreateCategoryRequest,
+        models::category::UpdateCategoryRequest,
+        error::ErrorResponse,
+    )),
+    tags(
+        (name = "assets", description = "Asset management"),
+        (name = "categories", description = "Category management"),
+    )
+)]
+struct ApiDoc;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -46,6 +89,8 @@ async fn main() -> Result<()> {
     let state = AppState { db: pool, storage };
 
     let app = Router::new()
+        // Docs
+        .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", ApiDoc::openapi()))
         // Assets
         .route("/assets", get(handlers::assets::list_assets).post(handlers::assets::create_asset))
         .route(

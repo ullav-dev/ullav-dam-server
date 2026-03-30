@@ -16,6 +16,14 @@ use crate::{
 
 // ── List all assets ───────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/assets",
+    tag = "assets",
+    responses(
+        (status = 200, description = "List of all assets", body = Vec<Asset>),
+    )
+)]
 pub async fn list_assets(State(state): State<AppState>) -> AppResult<Json<Vec<Asset>>> {
     let client = state.db.get().await?;
     let rows = client
@@ -33,6 +41,18 @@ pub async fn list_assets(State(state): State<AppState>) -> AppResult<Json<Vec<As
 
 // ── Get one asset with its categories ────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/assets/{id}",
+    tag = "assets",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Asset ID"),
+    ),
+    responses(
+        (status = 200, description = "Asset with its categories", body = AssetWithCategories),
+        (status = 404, description = "Asset not found", body = ErrorResponse),
+    )
+)]
 pub async fn get_asset(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -67,6 +87,16 @@ pub async fn get_asset(
 
 // ── Create asset record (metadata only, no file yet) ─────────────────────────
 
+#[utoipa::path(
+    post,
+    path = "/assets",
+    tag = "assets",
+    request_body = CreateAssetRequest,
+    responses(
+        (status = 201, description = "Asset record created", body = Asset),
+        (status = 400, description = "Invalid request body", body = ErrorResponse),
+    )
+)]
 pub async fn create_asset(
     State(state): State<AppState>,
     Json(body): Json<CreateAssetRequest>,
@@ -96,6 +126,20 @@ pub async fn create_asset(
 
 // ── Upload file for an asset ──────────────────────────────────────────────────
 
+#[utoipa::path(
+    post,
+    path = "/assets/{id}/upload",
+    tag = "assets",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Asset ID"),
+    ),
+    request_body(content = Vec<u8>, content_type = "multipart/form-data", description = "File to upload"),
+    responses(
+        (status = 200, description = "Asset with updated storage key and size", body = Asset),
+        (status = 400, description = "Missing or invalid file field", body = ErrorResponse),
+        (status = 404, description = "Asset not found", body = ErrorResponse),
+    )
+)]
 pub async fn upload_asset(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -152,6 +196,18 @@ pub async fn upload_asset(
 
 // ── Download / presigned URL ──────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/assets/{id}/download",
+    tag = "assets",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Asset ID"),
+    ),
+    responses(
+        (status = 200, description = "Raw file bytes as attachment", content_type = "application/octet-stream"),
+        (status = 404, description = "Asset not found", body = ErrorResponse),
+    )
+)]
 pub async fn download_asset(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -184,6 +240,19 @@ pub async fn download_asset(
 
 // ── Update asset metadata ─────────────────────────────────────────────────────
 
+#[utoipa::path(
+    put,
+    path = "/assets/{id}",
+    tag = "assets",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Asset ID"),
+    ),
+    request_body = UpdateAssetRequest,
+    responses(
+        (status = 200, description = "Updated asset", body = Asset),
+        (status = 404, description = "Asset not found", body = ErrorResponse),
+    )
+)]
 pub async fn update_asset(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -220,6 +289,18 @@ pub async fn update_asset(
 
 // ── Delete asset ──────────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    delete,
+    path = "/assets/{id}",
+    tag = "assets",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Asset ID"),
+    ),
+    responses(
+        (status = 204, description = "Asset deleted"),
+        (status = 404, description = "Asset not found", body = ErrorResponse),
+    )
+)]
 pub async fn delete_asset(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -247,6 +328,18 @@ pub async fn delete_asset(
 
 // ── Category membership ───────────────────────────────────────────────────────
 
+#[utoipa::path(
+    post,
+    path = "/assets/{asset_id}/categories/{category_id}",
+    tag = "assets",
+    params(
+        ("asset_id" = uuid::Uuid, Path, description = "Asset ID"),
+        ("category_id" = uuid::Uuid, Path, description = "Category ID"),
+    ),
+    responses(
+        (status = 204, description = "Category added to asset"),
+    )
+)]
 pub async fn add_category_to_asset(
     State(state): State<AppState>,
     Path((asset_id, category_id)): Path<(Uuid, Uuid)>,
@@ -264,6 +357,18 @@ pub async fn add_category_to_asset(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[utoipa::path(
+    delete,
+    path = "/assets/{asset_id}/categories/{category_id}",
+    tag = "assets",
+    params(
+        ("asset_id" = uuid::Uuid, Path, description = "Asset ID"),
+        ("category_id" = uuid::Uuid, Path, description = "Category ID"),
+    ),
+    responses(
+        (status = 204, description = "Category removed from asset"),
+    )
+)]
 pub async fn remove_category_from_asset(
     State(state): State<AppState>,
     Path((asset_id, category_id)): Path<(Uuid, Uuid)>,

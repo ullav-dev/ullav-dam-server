@@ -1,11 +1,12 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::Row;
+use utoipa::ToSchema;
 use uuid::Uuid;
 
 use crate::models::category::Category;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Asset {
     pub id: Uuid,
     pub name: String,
@@ -34,7 +35,7 @@ impl From<&Row> for Asset {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct AssetWithCategories {
     #[serde(flatten)]
     pub asset: Asset,
@@ -42,7 +43,7 @@ pub struct AssetWithCategories {
 }
 
 /// Request body for creating an asset record (before file upload).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct CreateAssetRequest {
     pub name: String,
     pub description: Option<String>,
@@ -50,7 +51,7 @@ pub struct CreateAssetRequest {
 }
 
 /// Request body for updating asset metadata.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, ToSchema)]
 pub struct UpdateAssetRequest {
     pub name: Option<String>,
     pub description: Option<String>,
