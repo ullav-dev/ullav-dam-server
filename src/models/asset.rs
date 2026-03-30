@@ -15,6 +15,12 @@ pub struct Asset {
     pub size: i64,
     pub storage_key: String,
     pub bucket: String,
+    pub caption: Option<String>,
+    pub keywords: Option<String>,
+    pub creator: Option<String>,
+    pub copyright_notice: Option<String>,
+    pub available: bool,
+    pub available_until: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -29,6 +35,12 @@ impl From<&Row> for Asset {
             size: row.get("size"),
             storage_key: row.get("storage_key"),
             bucket: row.get("bucket"),
+            caption: row.get("caption"),
+            keywords: row.get("keywords"),
+            creator: row.get("creator"),
+            copyright_notice: row.get("copyright_notice"),
+            available: row.get("available"),
+            available_until: row.get("available_until"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -48,6 +60,13 @@ pub struct CreateAssetRequest {
     pub name: String,
     pub description: Option<String>,
     pub asset_type: String,
+    pub caption: Option<String>,
+    pub keywords: Option<String>,
+    pub creator: Option<String>,
+    pub copyright_notice: Option<String>,
+    /// Defaults to `true` if omitted.
+    pub available: Option<bool>,
+    pub available_until: Option<DateTime<Utc>>,
 }
 
 /// Request body for updating asset metadata.
@@ -56,6 +75,12 @@ pub struct UpdateAssetRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub asset_type: Option<String>,
+    pub caption: Option<String>,
+    pub keywords: Option<String>,
+    pub creator: Option<String>,
+    pub copyright_notice: Option<String>,
+    pub available: Option<bool>,
+    pub available_until: Option<DateTime<Utc>>,
 }
 
 #[cfg(test)]
@@ -142,6 +167,12 @@ mod tests {
             size: 4096,
             storage_key: "assets/abc/test.jpg".to_string(),
             bucket: "dam-bucket".to_string(),
+            caption: None,
+            keywords: None,
+            creator: None,
+            copyright_notice: None,
+            available: true,
+            available_until: None,
             created_at: now,
             updated_at: now,
         }
@@ -173,6 +204,12 @@ mod tests {
             size: 0,
             storage_key: "pending/xyz".to_string(),
             bucket: "dam-bucket".to_string(),
+            caption: None,
+            keywords: None,
+            creator: None,
+            copyright_notice: None,
+            available: true,
+            available_until: None,
             created_at: now,
             updated_at: now,
         };

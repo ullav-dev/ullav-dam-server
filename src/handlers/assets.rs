@@ -14,6 +14,11 @@ use crate::{
     models::category::Category,
 };
 
+const ASSET_COLUMNS: &str =
+    "id, name, description, asset_type, size, storage_key, bucket, \
+     caption, keywords, creator, copyright_notice, available, available_until, \
+     created_at, updated_at";
+
 // ── List all assets ───────────────────────────────────────────────────────────
 
 #[utoipa::path(
@@ -28,9 +33,7 @@ pub async fn list_assets(State(state): State<AppState>) -> AppResult<Json<Vec<As
     let client = state.db.get().await?;
     let rows = client
         .query(
-            "SELECT id, name, description, asset_type, size, storage_key, bucket, created_at, updated_at
-             FROM assets
-             ORDER BY created_at DESC",
+            &format!("SELECT {ASSET_COLUMNS} FROM assets ORDER BY created_at DESC"),
             &[],
         )
         .await?;
@@ -61,8 +64,7 @@ pub async fn get_asset(
 
     let row = client
         .query_opt(
-            "SELECT id, name, description, asset_type, size, storage_key, bucket, created_at, updated_at
-             FROM assets WHERE id = $1",
+            &format!("SELECT {ASSET_COLUMNS} FROM assets WHERE id = $1"),
             &[&id],
         )
         .await?
@@ -105,18 +107,29 @@ pub async fn create_asset(
 
     // Placeholder storage key; real key assigned on upload
     let storage_key = format!("pending/{}", Uuid::new_v4());
+    let available = body.available.unwrap_or(true);
 
     let row = client
         .query_one(
-            "INSERT INTO assets (name, description, asset_type, size, storage_key, bucket)
-             VALUES ($1, $2, $3, 0, $4, $5)
-             RETURNING id, name, description, asset_type, size, storage_key, bucket, created_at, updated_at",
+            &format!(
+                "INSERT INTO assets \
+                 (name, description, asset_type, size, storage_key, bucket, \
+                  caption, keywords, creator, copyright_notice, available, available_until) \
+                 VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9, $10, $11) \
+                 RETURNING {ASSET_COLUMNS}"
+            ),
             &[
                 &body.name,
                 &body.description,
                 &body.asset_type,
                 &storage_key,
                 &state.storage.bucket,
+                &body.caption,
+                &body.keywords,
+                &body.creator,
+                &body.copyright_notice,
+                &available,
+                &body.available_until,
             ],
         )
         .await?;
@@ -185,8 +198,7 @@ pub async fn upload_asset(
 
     let row = client
         .query_one(
-            "UPDATE assets SET storage_key = $1, size = $2 WHERE id = $3
-             RETURNING id, name, description, asset_type, size, storage_key, bucket, created_at, updated_at",
+            &format!("UPDATE assets SET storage_key = $1, size = $2 WHERE id = $3 RETURNING {ASSET_COLUMNS}"),
             &[&storage_key, &size, &id],
         )
         .await?;
@@ -262,8 +274,7 @@ pub async fn update_asset(
 
     let row = client
         .query_opt(
-            "SELECT id, name, description, asset_type, size, storage_key, bucket, created_at, updated_at
-             FROM assets WHERE id = $1",
+            &format!("SELECT {ASSET_COLUMNS} FROM assets WHERE id = $1"),
             &[&id],
         )
         .await?
@@ -274,13 +285,29 @@ pub async fn update_asset(
     let name = body.name.unwrap_or(current.name);
     let description = body.description.or(current.description);
     let asset_type = body.asset_type.unwrap_or(current.asset_type);
+    let caption = body.caption.or(current.caption);
+    let keywords = body.keywords.or(current.keywords);
+    let creator = body.creator.or(current.creator);
+    let copyright_notice = body.copyright_notice.or(current.copyright_notice);
+    let available = body.available.unwrap_or(current.available);
+    let available_until = body.available_until.or(current.available_until);
 
     let updated = client
         .query_one(
-            "UPDATE assets SET name = $1, description = $2, asset_type = $3
-             WHERE id = $4
-             RETURNING id, name, description, asset_type, size, storage_key, bucket, created_at, updated_at",
-            &[&name, &description, &asset_type, &id],
+            &format!(
+                "UPDATE assets \
+                 SET name = $1, description = $2, asset_type = $3, \
+                     caption = $4, keywords = $5, creator = $6, copyright_notice = $7, \
+                     available = $8, available_until = $9 \
+                 WHERE id = $10 \
+                 RETURNING {ASSET_COLUMNS}"
+            ),
+            &[
+                &name, &description, &asset_type,
+                &caption, &keywords, &creator, &copyright_notice,
+                &available, &available_until,
+                &id,
+            ],
         )
         .await?;
 
@@ -339,8 +366,15 @@ struct UploadAssetForm {
     name: Option<String>,
     /// MIME type — inferred from the file extension if omitted (e.g. `image/png`, `application/pdf`)
     asset_type: Option<String>,
-    /// Optional description
     description: Option<String>,
+    caption: Option<String>,
+    keywords: Option<String>,
+    creator: Option<String>,
+    copyright_notice: Option<String>,
+    /// Defaults to `true` if omitted
+    available: Option<String>,
+    /// ISO 8601 datetime, e.g. `2026-12-31T00:00:00Z`
+    available_until: Option<String>,
 }
 
 #[utoipa::path(
@@ -363,6 +397,12 @@ pub async fn create_and_upload_asset(
     let mut name: Option<String> = None;
     let mut description: Option<String> = None;
     let mut asset_type: Option<String> = None;
+    let mut caption: Option<String> = None;
+    let mut keywords: Option<String> = None;
+    let mut creator: Option<String> = None;
+    let mut copyright_notice: Option<String> = None;
+    let mut available: Option<bool> = None;
+    let mut available_until: Option<chrono::DateTime<chrono::Utc>> = None;
     let mut file_data: Option<bytes::Bytes> = None;
     let mut file_name: Option<String> = None;
     let mut content_type_hdr = "application/octet-stream".to_string();
@@ -372,22 +412,8 @@ pub async fn create_and_upload_asset(
         .await
         .map_err(|e| AppError::BadRequest(e.to_string()))?
     {
-        match field.name() {
-            Some("name") => {
-                name = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
-            }
-            Some("description") => {
-                let v = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
-                if !v.is_empty() {
-                    description = Some(v);
-                }
-            }
-            Some("asset_type") => {
-                let v = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
-                if !v.is_empty() {
-                    asset_type = Some(v);
-                }
-            }
+        let field_name = field.name().map(|s| s.to_string());
+        match field_name.as_deref() {
             Some("file") | None => {
                 // Named "file" (Swagger UI) or unnamed — treat as the file payload
                 content_type_hdr = field
@@ -398,6 +424,34 @@ pub async fn create_and_upload_asset(
                 file_data = Some(
                     field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?,
                 );
+            }
+            Some(key @ ("name" | "description" | "asset_type" | "caption" | "keywords"
+                        | "creator" | "copyright_notice" | "available" | "available_until")) => {
+                let v = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+                if v.is_empty() {
+                    continue;
+                }
+                match key {
+                    "name" => name = Some(v),
+                    "description" => description = Some(v),
+                    "asset_type" => asset_type = Some(v),
+                    "caption" => caption = Some(v),
+                    "keywords" => keywords = Some(v),
+                    "creator" => creator = Some(v),
+                    "copyright_notice" => copyright_notice = Some(v),
+                    "available" => {
+                        available = Some(matches!(v.to_lowercase().as_str(), "true" | "1" | "yes"));
+                    }
+                    "available_until" => {
+                        available_until = Some(
+                            v.parse::<chrono::DateTime<chrono::Utc>>()
+                                .map_err(|_| AppError::BadRequest(
+                                    "available_until must be an ISO 8601 datetime (e.g. 2026-12-31T00:00:00Z)".into(),
+                                ))?,
+                        );
+                    }
+                    _ => {}
+                }
             }
             _ => {
                 // Consume and ignore unknown fields
@@ -422,6 +476,7 @@ pub async fn create_and_upload_asset(
             .to_string()
     });
 
+    let available = available.unwrap_or(true);
     let storage_key = format!("assets/{}/{}", asset_id, resolved_name);
     let size = file_data.len() as i64;
 
@@ -431,17 +486,16 @@ pub async fn create_and_upload_asset(
     let client = state.db.get().await?;
     let row = client
         .query_one(
-            "INSERT INTO assets (id, name, description, asset_type, size, storage_key, bucket)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
-             RETURNING id, name, description, asset_type, size, storage_key, bucket, created_at, updated_at",
+            &format!(
+                "INSERT INTO assets \
+                 (id, name, description, asset_type, size, storage_key, bucket, \
+                  caption, keywords, creator, copyright_notice, available, available_until) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+                 RETURNING {ASSET_COLUMNS}"
+            ),
             &[
-                &asset_id,
-                &name,
-                &description,
-                &asset_type,
-                &size,
-                &storage_key,
-                &state.storage.bucket,
+                &asset_id, &name, &description, &asset_type, &size, &storage_key, &state.storage.bucket,
+                &caption, &keywords, &creator, &copyright_notice, &available, &available_until,
             ],
         )
         .await?;
