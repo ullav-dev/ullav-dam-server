@@ -328,14 +328,28 @@ pub async fn delete_asset(
 
 // ── Create asset + upload file in one request ─────────────────────────────────
 
+/// Multipart form schema for POST /assets/upload.
+#[derive(utoipa::ToSchema)]
+#[allow(dead_code)]
+struct UploadAssetForm {
+    /// File to upload (required)
+    #[schema(format = Binary)]
+    file: Vec<u8>,
+    /// Asset name — defaults to the uploaded filename if omitted
+    name: Option<String>,
+    /// MIME type — inferred from the file extension if omitted (e.g. `image/png`, `application/pdf`)
+    asset_type: Option<String>,
+    /// Optional description
+    description: Option<String>,
+}
+
 #[utoipa::path(
     post,
     path = "/assets/upload",
     tag = "assets",
     request_body(
-        content = Vec<u8>,
+        content = inline(UploadAssetForm),
         content_type = "multipart/form-data",
-        description = "Multipart form fields: `file` (required), `name` (optional — defaults to filename), `asset_type` (optional — inferred from extension), `description` (optional)"
     ),
     responses(
         (status = 201, description = "Asset created and file uploaded", body = Asset),
@@ -374,8 +388,8 @@ pub async fn create_and_upload_asset(
                     asset_type = Some(v);
                 }
             }
-            _ => {
-                // Treat any other field (including unnamed fields) as the file
+            Some("file") | None => {
+                // Named "file" (Swagger UI) or unnamed — treat as the file payload
                 content_type_hdr = field
                     .content_type()
                     .unwrap_or("application/octet-stream")
@@ -384,6 +398,10 @@ pub async fn create_and_upload_asset(
                 file_data = Some(
                     field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?,
                 );
+            }
+            _ => {
+                // Consume and ignore unknown fields
+                let _ = field.bytes().await;
             }
         }
     }
