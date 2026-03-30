@@ -5,6 +5,8 @@ use axum::{
     response::Response,
     Json,
 };
+use image::{ImageFormat, imageops::FilterType};
+use std::io::Cursor;
 use uuid::Uuid;
 
 use crate::{
@@ -562,4 +564,117 @@ pub async fn remove_category_from_asset(
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Thumbnail ─────────────────────────────────────────────────────────────────
+
+const ICON_IMAGE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="12" fill="#E3F2FD"/><rect x="15" y="20" width="70" height="52" rx="5" fill="#fff" stroke="#1976D2" stroke-width="3"/><circle cx="33" cy="37" r="7" fill="#FFC107"/><path d="M15 55 L32 41 L47 53 L62 41 L85 55 L85 72 L15 72Z" fill="#81C784"/></svg>"##;
+const ICON_VIDEO: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="12" fill="#F3E5F5"/><rect x="10" y="28" width="60" height="44" rx="5" fill="#fff" stroke="#7B1FA2" stroke-width="3"/><path d="M70 38 L90 30 L90 70 L70 62Z" fill="#7B1FA2"/><polygon points="28,36 28,64 54,50" fill="#7B1FA2"/></svg>"##;
+const ICON_AUDIO: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="12" fill="#E8F5E9"/><rect x="38" y="15" width="24" height="40" rx="12" fill="#fff" stroke="#388E3C" stroke-width="3"/><path d="M25 48 Q25 72 50 72 Q75 72 75 48" fill="none" stroke="#388E3C" stroke-width="3"/><line x1="50" y1="72" x2="50" y2="85" stroke="#388E3C" stroke-width="3"/><line x1="35" y1="85" x2="65" y2="85" stroke="#388E3C" stroke-width="3"/></svg>"##;
+const ICON_PDF: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="12" fill="#FFEBEE"/><rect x="18" y="10" width="52" height="68" rx="4" fill="#fff" stroke="#C62828" stroke-width="2.5"/><path d="M55 10 L70 26 L55 26Z" fill="#FFCDD2"/><line x1="55" y1="10" x2="70" y2="26" stroke="#C62828" stroke-width="2.5"/><text x="28" y="62" fill="#C62828" font-size="16" font-weight="bold" font-family="sans-serif">PDF</text></svg>"##;
+const ICON_TEXT: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="12" fill="#F5F5F5"/><rect x="18" y="10" width="52" height="68" rx="4" fill="#fff" stroke="#757575" stroke-width="2.5"/><path d="M55 10 L70 26 L55 26Z" fill="#E0E0E0"/><line x1="55" y1="10" x2="70" y2="26" stroke="#757575" stroke-width="2.5"/><line x1="28" y1="38" x2="60" y2="38" stroke="#BDBDBD" stroke-width="2.5"/><line x1="28" y1="48" x2="60" y2="48" stroke="#BDBDBD" stroke-width="2.5"/><line x1="28" y1="58" x2="60" y2="58" stroke="#BDBDBD" stroke-width="2.5"/><line x1="28" y1="68" x2="45" y2="68" stroke="#BDBDBD" stroke-width="2.5"/></svg>"##;
+const ICON_FILE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" rx="12" fill="#FFF8E1"/><rect x="18" y="10" width="52" height="68" rx="4" fill="#fff" stroke="#F57F17" stroke-width="2.5"/><path d="M55 10 L70 26 L55 26Z" fill="#FFF9C4"/><line x1="55" y1="10" x2="70" y2="26" stroke="#F57F17" stroke-width="2.5"/><line x1="28" y1="42" x2="60" y2="42" stroke="#FFB300" stroke-width="2.5"/><line x1="28" y1="52" x2="60" y2="52" stroke="#FFB300" stroke-width="2.5"/><line x1="28" y1="62" x2="45" y2="62" stroke="#FFB300" stroke-width="2.5"/></svg>"##;
+
+fn fallback_icon(asset_type: &str) -> &'static str {
+    if asset_type.starts_with("video/") {
+        ICON_VIDEO
+    } else if asset_type.starts_with("audio/") {
+        ICON_AUDIO
+    } else if asset_type == "application/pdf" {
+        ICON_PDF
+    } else if asset_type.starts_with("text/") {
+        ICON_TEXT
+    } else if asset_type.starts_with("image/") {
+        ICON_IMAGE
+    } else {
+        ICON_FILE
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/assets/{id}/thumbnail",
+    tag = "assets",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Asset ID"),
+    ),
+    responses(
+        (status = 200, description = "PNG thumbnail (image assets) or SVG fallback icon (other types)",
+         content_type = "image/png"),
+        (status = 404, description = "Asset not found", body = ErrorResponse),
+    )
+)]
+pub async fn get_thumbnail(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> AppResult<Response> {
+    // 1. Check in-memory cache before hitting the database
+    {
+        let cache = state.thumbnail_cache.read().await;
+        if let Some(cached) = cache.get(&id) {
+            return Ok(build_thumbnail_response(cached.clone(), "image/png"));
+        }
+    }
+
+    // 2. Fetch asset metadata
+    let client = state.db.get().await?;
+    let row = client
+        .query_opt(
+            "SELECT storage_key, asset_type FROM assets WHERE id = $1",
+            &[&id],
+        )
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Asset {id} not found")))?;
+
+    let storage_key: String = row.get("storage_key");
+    let asset_type: String = row.get("asset_type");
+
+    // 3. Non-raster types (including SVG) and pending assets get the fallback icon immediately
+    let is_raster = asset_type.starts_with("image/") && asset_type != "image/svg+xml";
+    if !is_raster || storage_key.starts_with("pending/") {
+        let svg = fallback_icon(&asset_type);
+        return Ok(build_thumbnail_response(bytes::Bytes::from(svg), "image/svg+xml"));
+    }
+
+    // 4. Download the raw file from storage
+    let raw = state.storage.download(&storage_key).await?;
+    let size = state.thumbnail_size;
+
+    // 5. Resize on a blocking thread (CPU-bound work must not block the async runtime)
+    let result = tokio::task::spawn_blocking(move || -> Result<bytes::Bytes, String> {
+        let reader = image::ImageReader::new(Cursor::new(raw))
+            .with_guessed_format()
+            .map_err(|e| e.to_string())?;
+        let img = reader.decode().map_err(|e| e.to_string())?;
+        let thumb = img.resize(size, size, FilterType::Lanczos3);
+        let mut buf = Cursor::new(Vec::new());
+        thumb.write_to(&mut buf, ImageFormat::Png).map_err(|e| e.to_string())?;
+        Ok(bytes::Bytes::from(buf.into_inner()))
+    })
+    .await
+    .map_err(|e| AppError::Internal(anyhow::anyhow!("thumbnail thread panicked: {e}")))?;
+
+    // 6. On decode/resize failure, fall back to the icon rather than returning an error
+    let png = match result {
+        Ok(bytes) => bytes,
+        Err(e) => {
+            tracing::warn!("Thumbnail generation failed for asset {id}: {e}");
+            let svg = fallback_icon(&asset_type);
+            return Ok(build_thumbnail_response(bytes::Bytes::from(svg), "image/svg+xml"));
+        }
+    };
+
+    // 7. Write into cache
+    state.thumbnail_cache.write().await.insert(id, png.clone());
+
+    Ok(build_thumbnail_response(png, "image/png"))
+}
+
+fn build_thumbnail_response(data: bytes::Bytes, content_type: &'static str) -> Response {
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, content_type)
+        .header(header::CACHE_CONTROL, "public, max-age=86400")
+        .body(Body::from(data))
+        .expect("static header values are always valid")
 }

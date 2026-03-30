@@ -3,10 +3,15 @@ use axum::{
     Router,
     routing::{get, post},
 };
+use bytes::Bytes;
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+use uuid::Uuid;
 
 mod config;
 mod db;
@@ -19,10 +24,14 @@ use config::Config;
 use db::DbPool;
 use storage::StorageClient;
 
+pub type ThumbnailCache = Arc<RwLock<HashMap<Uuid, Bytes>>>;
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: DbPool,
     pub storage: StorageClient,
+    pub thumbnail_cache: ThumbnailCache,
+    pub thumbnail_size: u32,
 }
 
 #[derive(OpenApi)]
@@ -41,6 +50,7 @@ pub struct AppState {
         handlers::assets::update_asset,
         handlers::assets::delete_asset,
         handlers::assets::create_and_upload_asset,
+        handlers::assets::get_thumbnail,
         handlers::assets::add_category_to_asset,
         handlers::assets::remove_category_from_asset,
         handlers::categories::list_categories,
@@ -87,7 +97,12 @@ async fn main() -> Result<()> {
     // Storage
     let storage = StorageClient::new(&cfg).await?;
 
-    let state = AppState { db: pool, storage };
+    let state = AppState {
+        db: pool,
+        storage,
+        thumbnail_cache: Arc::new(RwLock::new(HashMap::new())),
+        thumbnail_size: cfg.thumbnail_size,
+    };
 
     let app = Router::new()
         // Docs
@@ -103,6 +118,7 @@ async fn main() -> Result<()> {
         .route("/assets/upload", post(handlers::assets::create_and_upload_asset))
         .route("/assets/:id/upload", post(handlers::assets::upload_asset))
         .route("/assets/:id/download", get(handlers::assets::download_asset))
+        .route("/assets/:id/thumbnail", get(handlers::assets::get_thumbnail))
         .route(
             "/assets/:asset_id/categories/:category_id",
             post(handlers::assets::add_category_to_asset)

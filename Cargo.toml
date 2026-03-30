@@ -55,6 +55,9 @@ utoipa-swagger-ui = { version = "7", features = ["axum"] }
 # MIME type inference
 mime_guess = "2"
 
+# Image processing for thumbnails
+image = "0.25"
+
 [profile.release]
 opt-level = 3
 lto = true
