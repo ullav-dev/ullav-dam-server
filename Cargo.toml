@@ -52,6 +52,9 @@ bytes = "1"
 utoipa = { version = "4", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui = { version = "7", features = ["axum"] }
 
+# MIME type inference
+mime_guess = "2"
+
 [profile.release]
 opt-level = 3
 lto = true

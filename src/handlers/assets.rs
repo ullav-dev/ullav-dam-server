@@ -335,11 +335,11 @@ pub async fn delete_asset(
     request_body(
         content = Vec<u8>,
         content_type = "multipart/form-data",
-        description = "Multipart form with fields: `name` (text), `asset_type` (text), `description` (text, optional), `file` (file)"
+        description = "Multipart form fields: `file` (required), `name` (optional — defaults to filename), `asset_type` (optional — inferred from extension), `description` (optional)"
     ),
     responses(
         (status = 201, description = "Asset created and file uploaded", body = Asset),
-        (status = 400, description = "Missing required field or invalid data", body = ErrorResponse),
+        (status = 400, description = "Missing file field or invalid data", body = ErrorResponse),
     )
 )]
 pub async fn create_and_upload_asset(
@@ -369,7 +369,10 @@ pub async fn create_and_upload_asset(
                 }
             }
             Some("asset_type") => {
-                asset_type = Some(field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?);
+                let v = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+                if !v.is_empty() {
+                    asset_type = Some(v);
+                }
             }
             _ => {
                 // Treat any other field (including unnamed fields) as the file
@@ -385,14 +388,22 @@ pub async fn create_and_upload_asset(
         }
     }
 
-    let name = name.ok_or_else(|| AppError::BadRequest("Missing 'name' field".into()))?;
-    let asset_type =
-        asset_type.ok_or_else(|| AppError::BadRequest("Missing 'asset_type' field".into()))?;
     let file_data =
         file_data.ok_or_else(|| AppError::BadRequest("Missing file field".into()))?;
 
     let asset_id = Uuid::new_v4();
     let resolved_name = file_name.unwrap_or_else(|| asset_id.to_string());
+
+    // Fall back to filename when name is omitted
+    let name = name.unwrap_or_else(|| resolved_name.clone());
+
+    // Infer asset_type from the file extension when omitted
+    let asset_type = asset_type.unwrap_or_else(|| {
+        mime_guess::from_path(&resolved_name)
+            .first_or_octet_stream()
+            .to_string()
+    });
+
     let storage_key = format!("assets/{}/{}", asset_id, resolved_name);
     let size = file_data.len() as i64;
 

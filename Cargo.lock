@@ -3094,6 +3094,7 @@ dependencies = [
  "chrono",
  "deadpool-postgres",
  "dotenvy",
+ "mime_guess",
  "postgres-types",
  "serde",
  "serde_json",
