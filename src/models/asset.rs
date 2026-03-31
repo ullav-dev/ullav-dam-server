@@ -21,6 +21,7 @@ pub struct Asset {
     pub copyright_notice: Option<String>,
     pub available: bool,
     pub available_until: Option<DateTime<Utc>>,
+    pub is_locked: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -41,6 +42,7 @@ impl From<&Row> for Asset {
             copyright_notice: row.get("copyright_notice"),
             available: row.get("available"),
             available_until: row.get("available_until"),
+            is_locked: row.get("is_locked"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -67,6 +69,8 @@ pub struct CreateAssetRequest {
     /// Defaults to `true` if omitted.
     pub available: Option<bool>,
     pub available_until: Option<DateTime<Utc>>,
+    /// Defaults to `false` if omitted.
+    pub is_locked: Option<bool>,
 }
 
 /// Request body for updating asset metadata.
@@ -81,6 +85,7 @@ pub struct UpdateAssetRequest {
     pub copyright_notice: Option<String>,
     pub available: Option<bool>,
     pub available_until: Option<DateTime<Utc>>,
+    pub is_locked: Option<bool>,
 }
 
 #[cfg(test)]
@@ -173,6 +178,7 @@ mod tests {
             copyright_notice: None,
             available: true,
             available_until: None,
+            is_locked: false,
             created_at: now,
             updated_at: now,
         }
@@ -210,6 +216,7 @@ mod tests {
             copyright_notice: None,
             available: true,
             available_until: None,
+            is_locked: false,
             created_at: now,
             updated_at: now,
         };

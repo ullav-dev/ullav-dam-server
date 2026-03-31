@@ -19,7 +19,7 @@ use crate::{
 const ASSET_COLUMNS: &str =
     "id, name, description, asset_type, size, storage_key, bucket, \
      caption, keywords, creator, copyright_notice, available, available_until, \
-     created_at, updated_at";
+     is_locked, created_at, updated_at";
 
 // ── List all assets ───────────────────────────────────────────────────────────
 
@@ -116,8 +116,8 @@ pub async fn create_asset(
             &format!(
                 "INSERT INTO assets \
                  (name, description, asset_type, size, storage_key, bucket, \
-                  caption, keywords, creator, copyright_notice, available, available_until) \
-                 VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9, $10, $11) \
+                  caption, keywords, creator, copyright_notice, available, available_until, is_locked) \
+                 VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
@@ -132,6 +132,7 @@ pub async fn create_asset(
                 &body.copyright_notice,
                 &available,
                 &body.available_until,
+                &body.is_locked.unwrap_or(false),
             ],
         )
         .await?;
@@ -293,6 +294,7 @@ pub async fn update_asset(
     let copyright_notice = body.copyright_notice.or(current.copyright_notice);
     let available = body.available.unwrap_or(current.available);
     let available_until = body.available_until.or(current.available_until);
+    let is_locked = body.is_locked.unwrap_or(current.is_locked);
 
     let updated = client
         .query_one(
@@ -300,14 +302,14 @@ pub async fn update_asset(
                 "UPDATE assets \
                  SET name = $1, description = $2, asset_type = $3, \
                      caption = $4, keywords = $5, creator = $6, copyright_notice = $7, \
-                     available = $8, available_until = $9 \
-                 WHERE id = $10 \
+                     available = $8, available_until = $9, is_locked = $10 \
+                 WHERE id = $11 \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
                 &name, &description, &asset_type,
                 &caption, &keywords, &creator, &copyright_notice,
-                &available, &available_until,
+                &available, &available_until, &is_locked,
                 &id,
             ],
         )
@@ -379,6 +381,9 @@ struct UploadAssetForm {
     /// Expiry datetime in ISO 8601 format.
     #[schema(format = DateTime, example = "2026-12-31T00:00:00Z")]
     available_until: Option<String>,
+    /// Whether the asset is locked (`"true"` or `"false"`). Defaults to `"false"` if omitted.
+    #[schema(example = "false")]
+    is_locked: Option<String>,
 }
 
 #[utoipa::path(
@@ -407,6 +412,7 @@ pub async fn create_and_upload_asset(
     let mut copyright_notice: Option<String> = None;
     let mut available: Option<bool> = None;
     let mut available_until: Option<chrono::DateTime<chrono::Utc>> = None;
+    let mut is_locked: Option<bool> = None;
     let mut file_data: Option<bytes::Bytes> = None;
     let mut file_name: Option<String> = None;
     let mut content_type_hdr = "application/octet-stream".to_string();
@@ -430,7 +436,8 @@ pub async fn create_and_upload_asset(
                 );
             }
             Some(key @ ("name" | "description" | "asset_type" | "caption" | "keywords"
-                        | "creator" | "copyright_notice" | "available" | "available_until")) => {
+                        | "creator" | "copyright_notice" | "available" | "available_until"
+                        | "is_locked")) => {
                 let v = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
                 if v.is_empty() {
                     continue;
@@ -445,6 +452,9 @@ pub async fn create_and_upload_asset(
                     "copyright_notice" => copyright_notice = Some(v),
                     "available" => {
                         available = Some(matches!(v.to_lowercase().as_str(), "true" | "1" | "yes"));
+                    }
+                    "is_locked" => {
+                        is_locked = Some(matches!(v.to_lowercase().as_str(), "true" | "1" | "yes"));
                     }
                     "available_until" => {
                         available_until = Some(
@@ -481,6 +491,7 @@ pub async fn create_and_upload_asset(
     });
 
     let available = available.unwrap_or(true);
+    let is_locked = is_locked.unwrap_or(false);
     let storage_key = format!("assets/{}/{}", asset_id, resolved_name);
     let size = file_data.len() as i64;
 
@@ -493,13 +504,13 @@ pub async fn create_and_upload_asset(
             &format!(
                 "INSERT INTO assets \
                  (id, name, description, asset_type, size, storage_key, bucket, \
-                  caption, keywords, creator, copyright_notice, available, available_until) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13) \
+                  caption, keywords, creator, copyright_notice, available, available_until, is_locked) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14) \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
                 &asset_id, &name, &description, &asset_type, &size, &storage_key, &state.storage.bucket,
-                &caption, &keywords, &creator, &copyright_notice, &available, &available_until,
+                &caption, &keywords, &creator, &copyright_notice, &available, &available_until, &is_locked,
             ],
         )
         .await?;
