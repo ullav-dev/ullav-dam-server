@@ -56,11 +56,12 @@ src/
 migrations/
   001_initial.sql  – Schema: assets, categories (self-ref parent_id), asset_categories (M2M)
   002_asset_metadata_fields.sql – Adds caption, keywords, creator, copyright_notice, available, available_until
+  003_asset_is_locked.sql       – Adds is_locked (BOOLEAN NOT NULL DEFAULT FALSE)
 ```
 
 ## Data Model
 
-- **Asset** – `id`, `name`, `description`, `asset_type`, `size` (bytes, BIGINT), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default true), `available_until` (nullable timestamptz), timestamps
+- **Asset** – `id`, `name`, `description`, `asset_type`, `size` (bytes, BIGINT), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default true), `available_until` (nullable timestamptz), `is_locked` (bool, default false), timestamps
 - **Category** – `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), timestamps
 - **asset_categories** – M2M junction table (asset_id, category_id)
 
@@ -73,7 +74,7 @@ migrations/
 | POST | `/assets/upload` | Create asset + upload file in one multipart request |
 | GET | `/assets/:id` | Get asset + its categories |
 | PUT | `/assets/:id` | Update asset metadata |
-| DELETE | `/assets/:id` | Delete asset + remove from storage |
+| DELETE | `/assets/:id` | Delete asset + remove from storage (403 if locked) |
 | POST | `/assets/:id/upload` | Upload file for an existing asset |
 | GET | `/assets/:id/download` | Download file bytes |
 | GET | `/assets/:id/thumbnail` | Get resized thumbnail (PNG) or SVG fallback icon |
@@ -91,7 +92,7 @@ migrations/
 
 - All handlers take `State(state): State<AppState>` — clone is cheap (Arc-backed pool + S3 client).
 - Database rows are converted to model structs via `impl From<&Row> for T`.
-- `AppError` implements `IntoResponse`; handlers return `AppResult<T>` (alias for `Result<T, AppError>`).
+- `AppError` implements `IntoResponse`; handlers return `AppResult<T>` (alias for `Result<T, AppError>`). Variants: `NotFound` → 404, `BadRequest` → 400, `Forbidden` → 403, `Database`/`Pool`/`Storage`/`Internal` → 500.
 - `ErrorResponse` in `error.rs` is the shared OpenAPI schema for all error response bodies.
 - All model structs and request/response types derive `ToSchema` for OpenAPI generation.
 - Handler functions carry `#[utoipa::path(...)]` annotations; `ApiDoc` in `main.rs` aggregates them.
