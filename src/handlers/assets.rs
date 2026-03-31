@@ -329,6 +329,7 @@ pub async fn update_asset(
     ),
     responses(
         (status = 204, description = "Asset deleted"),
+        (status = 403, description = "Asset is locked and cannot be deleted", body = ErrorResponse),
         (status = 404, description = "Asset not found", body = ErrorResponse),
     )
 )]
@@ -339,9 +340,14 @@ pub async fn delete_asset(
     let client = state.db.get().await?;
 
     let row = client
-        .query_opt("SELECT storage_key FROM assets WHERE id = $1", &[&id])
+        .query_opt("SELECT storage_key, is_locked FROM assets WHERE id = $1", &[&id])
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Asset {id} not found")))?;
+
+    let is_locked: bool = row.get("is_locked");
+    if is_locked {
+        return Err(AppError::Forbidden("Asset is locked and cannot be deleted".into()));
+    }
 
     let storage_key: String = row.get("storage_key");
 
