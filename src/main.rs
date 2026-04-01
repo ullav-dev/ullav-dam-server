@@ -127,6 +127,9 @@ async fn main() -> Result<()> {
             post(handlers::assets::add_category_to_asset)
                 .delete(handlers::assets::remove_category_from_asset),
         )
+        // ZIP import
+        .route("/zip/upload", post(handlers::zip::upload_zip)
+            .layer(DefaultBodyLimit::max(200 * 1024 * 1024)))
         // Categories
         .route("/categories", get(handlers::categories::list_categories).post(handlers::categories::create_category))
         .route(

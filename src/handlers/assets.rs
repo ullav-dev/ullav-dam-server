@@ -121,6 +121,54 @@ fn render_office_thumbnail(data: &[u8], ext: &str, size: u32) -> Result<bytes::B
     render_pdf_thumbnail(&pdf_bytes, size)
 }
 
+// ── Apple iWork thumbnail extraction ─────────────────────────────────────────
+
+/// Returns `true` for Pages, Numbers, and Keynote MIME types.
+fn is_iwork_mime(mime: &str) -> bool {
+    matches!(
+        mime,
+        "application/x-iwork-pages-sffpages"
+            | "application/x-iwork-numbers-sffnumbers"
+            | "application/x-iwork-keynote-sffkey"
+            | "application/vnd.apple.pages"
+            | "application/vnd.apple.numbers"
+            | "application/vnd.apple.keynote"
+    )
+}
+
+/// Extract the embedded QuickLook thumbnail from an iWork ZIP archive and
+/// resize it to `size × size` (preserving aspect ratio).  Returns `Err` if
+/// no thumbnail entry is found or decoding fails; the caller falls back to the
+/// SVG icon.
+fn extract_iwork_thumbnail(data: &[u8], size: u32) -> Result<bytes::Bytes, String> {
+    use std::io::{Cursor, Read};
+    use zip::ZipArchive;
+
+    let mut archive = ZipArchive::new(Cursor::new(data))
+        .map_err(|e| format!("open iWork ZIP: {e}"))?;
+
+    // Apple embeds a pre-rendered JPEG thumbnail at one of these paths.
+    let candidates = ["QuickLook/Thumbnail.jpg", "QuickLook/Thumbnail.png", "preview.jpg"];
+
+    for candidate in &candidates {
+        if let Ok(mut entry) = archive.by_name(candidate) {
+            let mut img_bytes = Vec::new();
+            entry.read_to_end(&mut img_bytes)
+                .map_err(|e| format!("read {candidate}: {e}"))?;
+
+            let img = image::load_from_memory(&img_bytes)
+                .map_err(|e| format!("decode {candidate}: {e}"))?;
+            let thumb = img.thumbnail(size, size);
+            let mut buf = Cursor::new(Vec::new());
+            thumb.write_to(&mut buf, ImageFormat::Png)
+                .map_err(|e| e.to_string())?;
+            return Ok(bytes::Bytes::from(buf.into_inner()));
+        }
+    }
+
+    Err("no QuickLook thumbnail found in iWork archive".into())
+}
+
 use crate::{
     AppState,
     error::{AppError, AppResult},
@@ -758,14 +806,17 @@ pub async fn get_thumbnail(
     let storage_key: String = row.get("storage_key");
     let asset_type: String = row.get("asset_type");
 
-    // 3. Only raster images, PDFs, and Office documents get rendered; everything
-    //    else (SVG, video, audio…) and pending (not yet uploaded) assets return
-    //    the SVG fallback icon immediately.
+    // 3. Only raster images, PDFs, Office documents, and iWork files get
+    //    rendered; everything else (SVG, video, audio…) and pending (not yet
+    //    uploaded) assets return the SVG fallback icon immediately.
     let is_raster = asset_type.starts_with("image/") && asset_type != "image/svg+xml";
     let is_pdf = asset_type == "application/pdf";
     let office_ext = office_mime_to_ext(&asset_type);
+    let is_iwork = is_iwork_mime(&asset_type);
 
-    if (!is_raster && !is_pdf && office_ext.is_none()) || storage_key.starts_with("pending/") {
+    if (!is_raster && !is_pdf && office_ext.is_none() && !is_iwork)
+        || storage_key.starts_with("pending/")
+    {
         let svg = fallback_icon(&asset_type);
         return Ok(build_thumbnail_response(bytes::Bytes::from(svg), "image/svg+xml"));
     }
@@ -780,6 +831,8 @@ pub async fn get_thumbnail(
             render_pdf_thumbnail(&raw, size)
         } else if let Some(ext) = office_ext {
             render_office_thumbnail(&raw, ext, size)
+        } else if is_iwork {
+            extract_iwork_thumbnail(&raw, size)
         } else {
             let reader = image::ImageReader::new(Cursor::new(raw))
                 .with_guessed_format()

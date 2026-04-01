@@ -64,6 +64,9 @@ pdfium-render = { version = "0.8", features = ["image"] }
 # Temp files for Office → PDF conversion
 tempfile = "3"
 
+# ZIP extraction for Apple iWork thumbnail extraction (Pages, Numbers, Keynote)
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
 [profile.release]
 opt-level = 3
 lto = true
