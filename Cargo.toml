@@ -58,6 +58,9 @@ mime_guess = "2"
 # Image processing for thumbnails
 image = "0.25"
 
+# PDF thumbnail rendering (pdfium-render wraps Google's PDFium; Apache 2.0)
+pdfium-render = { version = "0.8", features = ["image"] }
+
 [profile.release]
 opt-level = 3
 lto = true

@@ -24,6 +24,9 @@ pub async fn run_migrations(pool: &Pool) -> Result<()> {
     let sql = include_str!("../migrations/002_asset_metadata_fields.sql");
     client.batch_execute(sql).await.context("Failed to run migration 002")?;
 
+    let sql = include_str!("../migrations/003_asset_is_locked.sql");
+    client.batch_execute(sql).await.context("Failed to run migration 003")?;
+
     tracing::info!("Migrations applied successfully");
     Ok(())
 }

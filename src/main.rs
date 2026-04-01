@@ -1,6 +1,7 @@
 use anyhow::Result;
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     routing::{get, post},
 };
 use bytes::Bytes;
@@ -115,8 +116,10 @@ async fn main() -> Result<()> {
                 .put(handlers::assets::update_asset)
                 .delete(handlers::assets::delete_asset),
         )
-        .route("/assets/upload", post(handlers::assets::create_and_upload_asset))
-        .route("/assets/:id/upload", post(handlers::assets::upload_asset))
+        .route("/assets/upload", post(handlers::assets::create_and_upload_asset)
+            .layer(DefaultBodyLimit::max(200 * 1024 * 1024)))
+        .route("/assets/:id/upload", post(handlers::assets::upload_asset)
+            .layer(DefaultBodyLimit::max(200 * 1024 * 1024)))
         .route("/assets/:id/download", get(handlers::assets::download_asset))
         .route("/assets/:id/thumbnail", get(handlers::assets::get_thumbnail))
         .route(

@@ -9,6 +9,50 @@ use image::{ImageFormat, imageops::FilterType};
 use std::io::Cursor;
 use uuid::Uuid;
 
+// ── PDF thumbnail rendering ───────────────────────────────────────────────────
+
+/// Render the first page of a PDF to a PNG thumbnail of at most `size × size` pixels.
+/// Returns `Err(String)` on any failure; the caller falls back to the SVG icon.
+fn render_pdf_thumbnail(data: &[u8], size: u32) -> Result<bytes::Bytes, String> {
+    use pdfium_render::prelude::*;
+
+    // Bind to the PDFium shared library.  PDFIUM_LIB_PATH takes precedence so
+    // that deployments can point at the right binary without recompiling.
+    let bindings = match std::env::var("PDFIUM_LIB_PATH") {
+        Ok(path) => Pdfium::bind_to_library(&path)
+            .map_err(|e| format!("pdfium load from {path}: {e}"))?,
+        Err(_) => Pdfium::bind_to_system_library()
+            .map_err(|e| format!("pdfium system library: {e}"))?,
+    };
+
+    let pdfium = Pdfium::new(bindings);
+
+    let doc = pdfium
+        .load_pdf_from_byte_slice(data, None)
+        .map_err(|e| format!("PDF parse: {e}"))?;
+
+    let page = doc
+        .pages()
+        .get(0)
+        .map_err(|e| format!("PDF no page 0: {e}"))?;
+
+    let config = PdfRenderConfig::new()
+        .set_target_width(size as i32)
+        .set_maximum_height(size as i32);
+
+    let bitmap = page
+        .render_with_config(&config)
+        .map_err(|e| format!("PDF render: {e}"))?;
+
+    let img = bitmap.as_image();
+
+    let mut buf = Cursor::new(Vec::new());
+    img.write_to(&mut buf, ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
+
+    Ok(bytes::Bytes::from(buf.into_inner()))
+}
+
 use crate::{
     AppState,
     error::{AppError, AppResult},
@@ -646,9 +690,12 @@ pub async fn get_thumbnail(
     let storage_key: String = row.get("storage_key");
     let asset_type: String = row.get("asset_type");
 
-    // 3. Non-raster types (including SVG) and pending assets get the fallback icon immediately
+    // 3. Only raster images and PDFs get rendered; everything else (SVG, video, audio…)
+    //    and pending (not yet uploaded) assets return the SVG fallback icon immediately.
     let is_raster = asset_type.starts_with("image/") && asset_type != "image/svg+xml";
-    if !is_raster || storage_key.starts_with("pending/") {
+    let is_pdf = asset_type == "application/pdf";
+
+    if (!is_raster && !is_pdf) || storage_key.starts_with("pending/") {
         let svg = fallback_icon(&asset_type);
         return Ok(build_thumbnail_response(bytes::Bytes::from(svg), "image/svg+xml"));
     }
@@ -657,21 +704,25 @@ pub async fn get_thumbnail(
     let raw = state.storage.download(&storage_key).await?;
     let size = state.thumbnail_size;
 
-    // 5. Resize on a blocking thread (CPU-bound work must not block the async runtime)
+    // 5. Render on a blocking thread (CPU-bound — must not block the async runtime)
     let result = tokio::task::spawn_blocking(move || -> Result<bytes::Bytes, String> {
-        let reader = image::ImageReader::new(Cursor::new(raw))
-            .with_guessed_format()
-            .map_err(|e| e.to_string())?;
-        let img = reader.decode().map_err(|e| e.to_string())?;
-        let thumb = img.resize(size, size, FilterType::Lanczos3);
-        let mut buf = Cursor::new(Vec::new());
-        thumb.write_to(&mut buf, ImageFormat::Png).map_err(|e| e.to_string())?;
-        Ok(bytes::Bytes::from(buf.into_inner()))
+        if is_pdf {
+            render_pdf_thumbnail(&raw, size)
+        } else {
+            let reader = image::ImageReader::new(Cursor::new(raw))
+                .with_guessed_format()
+                .map_err(|e| e.to_string())?;
+            let img = reader.decode().map_err(|e| e.to_string())?;
+            let thumb = img.resize(size, size, FilterType::Lanczos3);
+            let mut buf = Cursor::new(Vec::new());
+            thumb.write_to(&mut buf, ImageFormat::Png).map_err(|e| e.to_string())?;
+            Ok(bytes::Bytes::from(buf.into_inner()))
+        }
     })
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("thumbnail thread panicked: {e}")))?;
 
-    // 6. On decode/resize failure, fall back to the icon rather than returning an error
+    // 6. On failure fall back to the icon rather than returning an error to the client
     let png = match result {
         Ok(bytes) => bytes,
         Err(e) => {
