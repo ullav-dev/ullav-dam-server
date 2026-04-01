@@ -53,6 +53,74 @@ fn render_pdf_thumbnail(data: &[u8], size: u32) -> Result<bytes::Bytes, String> 
     Ok(bytes::Bytes::from(buf.into_inner()))
 }
 
+// ── Office document thumbnail rendering ──────────────────────────────────────
+
+/// Map an Office MIME type to the file extension LibreOffice needs on the temp
+/// input file.  Returns `None` for non-Office types.
+fn office_mime_to_ext(mime: &str) -> Option<&'static str> {
+    match mime {
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => Some("docx"),
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => Some("xlsx"),
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => Some("pptx"),
+        "application/msword" => Some("doc"),
+        "application/vnd.ms-excel" => Some("xls"),
+        "application/vnd.ms-powerpoint" => Some("ppt"),
+        _ => None,
+    }
+}
+
+/// Convert an Office document to PDF via LibreOffice headless, then render the
+/// first page as a PNG thumbnail.
+///
+/// `SOFFICE_PATH` overrides the LibreOffice binary location (defaults to
+/// `soffice` on `$PATH`).  Returns `Err(String)` on any failure; the caller
+/// falls back to the SVG icon.
+fn render_office_thumbnail(data: &[u8], ext: &str, size: u32) -> Result<bytes::Bytes, String> {
+    use std::process::Command;
+
+    // Write Office bytes to a temp file with the correct extension so LibreOffice
+    // can detect the format.
+    let input = tempfile::Builder::new()
+        .suffix(&format!(".{ext}"))
+        .tempfile()
+        .map_err(|e| format!("create temp input file: {e}"))?;
+    std::fs::write(input.path(), data)
+        .map_err(|e| format!("write temp input file: {e}"))?;
+
+    // LibreOffice writes `<stem>.pdf` into the output directory.
+    let outdir = tempfile::tempdir()
+        .map_err(|e| format!("create temp output dir: {e}"))?;
+
+    let soffice = std::env::var("SOFFICE_PATH").unwrap_or_else(|_| "soffice".into());
+
+    let status = Command::new(&soffice)
+        .args([
+            "--headless",
+            "--convert-to",
+            "pdf",
+            "--outdir",
+            outdir.path().to_str().unwrap_or("/tmp"),
+            input.path().to_str().unwrap_or(""),
+        ])
+        .status()
+        .map_err(|e| format!("soffice exec: {e}"))?;
+
+    if !status.success() {
+        return Err(format!("soffice exited with {status}"));
+    }
+
+    let stem = input
+        .path()
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("output");
+    let pdf_path = outdir.path().join(format!("{stem}.pdf"));
+    let pdf_bytes = std::fs::read(&pdf_path)
+        .map_err(|e| format!("read converted PDF {}: {e}", pdf_path.display()))?;
+
+    render_pdf_thumbnail(&pdf_bytes, size)
+}
+
 use crate::{
     AppState,
     error::{AppError, AppResult},
@@ -690,12 +758,14 @@ pub async fn get_thumbnail(
     let storage_key: String = row.get("storage_key");
     let asset_type: String = row.get("asset_type");
 
-    // 3. Only raster images and PDFs get rendered; everything else (SVG, video, audio…)
-    //    and pending (not yet uploaded) assets return the SVG fallback icon immediately.
+    // 3. Only raster images, PDFs, and Office documents get rendered; everything
+    //    else (SVG, video, audio…) and pending (not yet uploaded) assets return
+    //    the SVG fallback icon immediately.
     let is_raster = asset_type.starts_with("image/") && asset_type != "image/svg+xml";
     let is_pdf = asset_type == "application/pdf";
+    let office_ext = office_mime_to_ext(&asset_type);
 
-    if (!is_raster && !is_pdf) || storage_key.starts_with("pending/") {
+    if (!is_raster && !is_pdf && office_ext.is_none()) || storage_key.starts_with("pending/") {
         let svg = fallback_icon(&asset_type);
         return Ok(build_thumbnail_response(bytes::Bytes::from(svg), "image/svg+xml"));
     }
@@ -708,6 +778,8 @@ pub async fn get_thumbnail(
     let result = tokio::task::spawn_blocking(move || -> Result<bytes::Bytes, String> {
         if is_pdf {
             render_pdf_thumbnail(&raw, size)
+        } else if let Some(ext) = office_ext {
+            render_office_thumbnail(&raw, ext, size)
         } else {
             let reader = image::ImageReader::new(Cursor::new(raw))
                 .with_guessed_format()

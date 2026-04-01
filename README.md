@@ -9,7 +9,7 @@ A Digital Asset Management (DAM) HTTP API server written in Rust.
 - **Storage:** aws-sdk-s3 against a MinIO instance (path-style, S3-compatible)
 - **Runtime:** Tokio
 - **API Docs:** utoipa + Swagger UI
-- **Image processing:** `image` crate (raster thumbnails), `pdfium-render` (PDF thumbnails)
+- **Image processing:** `image` crate (raster thumbnails), `pdfium-render` (PDF thumbnails), LibreOffice headless (Office document thumbnails)
 
 ## Prerequisites
 
@@ -69,7 +69,7 @@ The raw OpenAPI JSON spec is at `http://localhost:8080/api-doc/openapi.json`.
 | DELETE | `/assets/:id` | Delete asset and remove from storage (returns 403 if locked) |
 | POST | `/assets/:id/upload` | Upload file for an existing asset |
 | GET | `/assets/:id/download` | Download asset file |
-| GET | `/assets/:id/thumbnail` | Get resized thumbnail (PNG for images/PDFs, SVG icon otherwise) |
+| GET | `/assets/:id/thumbnail` | Get resized thumbnail (PNG for images/PDFs/Office docs, SVG icon otherwise) |
 | POST | `/assets/:asset_id/categories/:category_id` | Add category to asset |
 | DELETE | `/assets/:asset_id/categories/:category_id` | Remove category from asset |
 | GET | `/categories` | List all categories |
@@ -122,3 +122,4 @@ curl -X POST http://localhost:8080/assets/upload \
 | `PORT` | no | `8080` | Bind port |
 | `THUMBNAIL_SIZE` | no | `256` | Max width/height of generated thumbnails (px) |
 | `PDFIUM_LIB_PATH` | no | system | Path to the PDFium shared library (`.so`/`.dylib`) for PDF thumbnails |
+| `SOFFICE_PATH` | no | `soffice` | Path to the LibreOffice binary for Office document thumbnails |
