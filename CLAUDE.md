@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Storage:** aws-sdk-s3 against a MinIO instance (path-style, S3-compatible)
 - **Runtime:** Tokio
 - **API Docs:** utoipa + Swagger UI (served at `/docs`, spec at `/api-doc/openapi.json`)
-- **Image processing:** `image` crate (thumbnail generation)
+- **Image processing:** `image` crate (thumbnail generation), `pdfium-render` (PDF first-page thumbnail)
 - **MIME inference:** `mime_guess` (file extension → MIME type)
 
 ## Commands
@@ -99,5 +99,9 @@ migrations/
 - Asset upload flows:
   - Two-step: `POST /assets` creates record with a `pending/` storage key → `POST /assets/:id/upload` uploads file and updates `storage_key` + `size`.
   - One-step: `POST /assets/upload` accepts multipart with `file`, optional `name` (defaults to filename), optional `asset_type` (inferred from extension via `mime_guess`), optional `description`. Uploads to S3 first, then inserts DB record.
-- Thumbnail generation: `GET /assets/:id/thumbnail` checks the in-memory `ThumbnailCache` first (read lock), downloads from S3 on miss, decodes + resizes with `image` crate inside `spawn_blocking` (keeps async runtime unblocked), writes result (write lock), and returns PNG with `Cache-Control: public, max-age=86400`. Non-raster types and pending assets return type-appropriate SVG fallback icons instead of errors.
+- Thumbnail generation: `GET /assets/:id/thumbnail` checks the in-memory `ThumbnailCache` first (read lock), downloads from S3 on miss, and renders inside `spawn_blocking` (CPU-bound work must not block the async runtime):
+  - **Raster images** — decoded and resized with the `image` crate (Lanczos3), returned as PNG.
+  - **PDFs** — first page rendered via `pdfium-render` (wraps Google PDFium). Set `PDFIUM_LIB_PATH` to the `.so`/`.dylib` path; falls back to the system library if unset.
+  - **Everything else** (SVG, video, audio, pending uploads) — returns a type-appropriate SVG fallback icon immediately, no download attempted.
+  - On any render failure the fallback icon is returned instead of an error. Successful PNGs are written to cache with `Cache-Control: public, max-age=86400`.
 - Branch policy: all development happens on `claude-work`; do not commit to `main`.
