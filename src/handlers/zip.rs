@@ -57,21 +57,30 @@ pub async fn upload_zip(
     // ── 1. Parse multipart ───────────────────────────────────────────────────
     let mut file_bytes: Option<bytes::Bytes> = None;
     let mut file_name = "archive".to_string();
+    let mut creator: Option<String> = None;
 
     while let Some(field) = multipart
         .next_field()
         .await
         .map_err(|e| AppError::BadRequest(e.to_string()))?
     {
-        if matches!(field.name(), Some("file") | None) {
-            if let Some(fname) = field.file_name() {
-                file_name = fname.to_string();
+        match field.name() {
+            Some("file") | None => {
+                if let Some(fname) = field.file_name() {
+                    file_name = fname.to_string();
+                }
+                file_bytes = Some(
+                    field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?,
+                );
             }
-            file_bytes = Some(
-                field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?,
-            );
-        } else {
-            let _ = field.bytes().await;
+            Some("creator") => {
+                let bytes = field.bytes().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
+                let s = String::from_utf8_lossy(&bytes).trim().to_string();
+                if !s.is_empty() {
+                    creator = Some(s);
+                }
+            }
+            _ => { let _ = field.bytes().await; }
         }
     }
 
@@ -233,8 +242,8 @@ pub async fn upload_zip(
             .query_one(
                 &format!(
                     "INSERT INTO assets \
-                     (id, name, asset_type, size, storage_key, bucket, available, is_locked) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
+                     (id, name, asset_type, size, storage_key, bucket, creator, available, is_locked) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
                      RETURNING {ASSET_COLUMNS}"
                 ),
                 &[
@@ -244,6 +253,7 @@ pub async fn upload_zip(
                     &size,
                     &storage_key,
                     &state.storage.bucket,
+                    &creator,
                     &true,  // available
                     &false, // is_locked
                 ],
