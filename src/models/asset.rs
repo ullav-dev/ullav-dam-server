@@ -22,6 +22,10 @@ pub struct Asset {
     pub available: bool,
     pub available_until: Option<DateTime<Utc>>,
     pub is_locked: bool,
+    pub is_private: bool,
+    pub public_read: bool,
+    pub public_download: bool,
+    pub public_write: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -43,6 +47,10 @@ impl From<&Row> for Asset {
             available: row.get("available"),
             available_until: row.get("available_until"),
             is_locked: row.get("is_locked"),
+            is_private: row.get("is_private"),
+            public_read: row.get("public_read"),
+            public_download: row.get("public_download"),
+            public_write: row.get("public_write"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -71,6 +79,14 @@ pub struct CreateAssetRequest {
     pub available_until: Option<DateTime<Utc>>,
     /// Defaults to `false` if omitted.
     pub is_locked: Option<bool>,
+    /// Defaults to `true` if omitted — asset is private to the uploader.
+    pub is_private: Option<bool>,
+    /// Allow unauthenticated read access. Requires `is_private = false`.
+    pub public_read: Option<bool>,
+    /// Allow unauthenticated download. Requires `is_private = false`.
+    pub public_download: Option<bool>,
+    /// Allow unauthenticated write access. Requires `is_private = false`.
+    pub public_write: Option<bool>,
 }
 
 /// Request body for updating asset metadata.
@@ -86,6 +102,10 @@ pub struct UpdateAssetRequest {
     pub available: Option<bool>,
     pub available_until: Option<DateTime<Utc>>,
     pub is_locked: Option<bool>,
+    pub is_private: Option<bool>,
+    pub public_read: Option<bool>,
+    pub public_download: Option<bool>,
+    pub public_write: Option<bool>,
 }
 
 #[cfg(test)]
@@ -179,6 +199,10 @@ mod tests {
             available: true,
             available_until: None,
             is_locked: false,
+            is_private: true,
+            public_read: false,
+            public_download: false,
+            public_write: false,
             created_at: now,
             updated_at: now,
         }
@@ -217,6 +241,10 @@ mod tests {
             available: true,
             available_until: None,
             is_locked: false,
+            is_private: true,
+            public_read: false,
+            public_download: false,
+            public_write: false,
             created_at: now,
             updated_at: now,
         };
