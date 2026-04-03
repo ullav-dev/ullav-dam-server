@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Storage:** aws-sdk-s3 against a MinIO instance (path-style, S3-compatible)
 - **Runtime:** Tokio
 - **API Docs:** utoipa + Swagger UI (served at `/docs`, spec at `/api-doc/openapi.json`)
-- **Image processing:** `image` crate (thumbnail generation), `pdfium-render` (PDF first-page thumbnail), LibreOffice headless (Office document → PDF → thumbnail)
+- **Image processing:** `image` crate (thumbnail generation), `pdfium-render` (PDF first-page thumbnail), LibreOffice headless (Office document → PDF → thumbnail), `zip` crate (Apple iWork QuickLook thumbnail extraction)
 - **MIME inference:** `mime_guess` (file extension → MIME type)
 
 ## Commands
@@ -57,11 +57,12 @@ migrations/
   001_initial.sql  – Schema: assets, categories (self-ref parent_id), asset_categories (M2M)
   002_asset_metadata_fields.sql – Adds caption, keywords, creator, copyright_notice, available, available_until
   003_asset_is_locked.sql       – Adds is_locked (BOOLEAN NOT NULL DEFAULT FALSE)
+  004_asset_visibility.sql      – Adds is_private (default true), public_read/download/write (default false)
 ```
 
 ## Data Model
 
-- **Asset** – `id`, `name`, `description`, `asset_type`, `size` (bytes, BIGINT), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default true), `available_until` (nullable timestamptz), `is_locked` (bool, default false), timestamps
+- **Asset** – `id`, `name`, `description`, `asset_type`, `size` (bytes, BIGINT), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default true), `available_until` (nullable timestamptz), `is_locked` (bool, default false), `is_private` (bool, default true), `public_read`/`public_download`/`public_write` (bool, default false), timestamps
 - **Category** – `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), timestamps
 - **asset_categories** – M2M junction table (asset_id, category_id)
 
@@ -103,6 +104,7 @@ migrations/
   - **Raster images** — decoded and resized with the `image` crate (Lanczos3), returned as PNG.
   - **PDFs** — first page rendered via `pdfium-render` (wraps Google PDFium). Set `PDFIUM_LIB_PATH` to the `.so`/`.dylib` path; falls back to the system library if unset.
   - **Office documents** (`.docx`/`.doc`, `.xlsx`/`.xls`, `.pptx`/`.ppt`) — written to a temp file, converted to PDF by LibreOffice headless (`soffice --headless --convert-to pdf`), then rendered via pdfium. Set `SOFFICE_PATH` to override the binary location (defaults to `soffice` on `$PATH`).
+  - **Apple iWork** (Pages, Numbers, Keynote) — extracted from the ZIP archive's embedded QuickLook thumbnail (`QuickLook/Thumbnail.jpg` or `.png`) using the `zip` crate, then resized with the `image` crate.
   - **Everything else** (SVG, video, audio, pending uploads) — returns a type-appropriate SVG fallback icon immediately, no download attempted.
   - On any render failure the fallback icon is returned instead of an error. Successful PNGs are written to cache with `Cache-Control: public, max-age=86400`.
 - Branch policy: all development happens on `claude-work`; do not commit to `main`.

@@ -9,7 +9,7 @@ A Digital Asset Management (DAM) HTTP API server written in Rust.
 - **Storage:** aws-sdk-s3 against a MinIO instance (path-style, S3-compatible)
 - **Runtime:** Tokio
 - **API Docs:** utoipa + Swagger UI
-- **Image processing:** `image` crate (raster thumbnails), `pdfium-render` (PDF thumbnails), LibreOffice headless (Office document thumbnails)
+- **Image processing:** `image` crate (raster thumbnails), `pdfium-render` (PDF thumbnails), LibreOffice headless (Office document thumbnails), `zip` crate (Apple iWork thumbnails)
 
 ## Prerequisites
 
@@ -69,7 +69,7 @@ The raw OpenAPI JSON spec is at `http://localhost:8080/api-doc/openapi.json`.
 | DELETE | `/assets/:id` | Delete asset and remove from storage (returns 403 if locked) |
 | POST | `/assets/:id/upload` | Upload file for an existing asset |
 | GET | `/assets/:id/download` | Download asset file |
-| GET | `/assets/:id/thumbnail` | Get resized thumbnail (PNG for images/PDFs/Office docs, SVG icon otherwise) |
+| GET | `/assets/:id/thumbnail` | Get resized thumbnail (PNG for images/PDFs/Office/iWork, SVG icon otherwise) |
 | POST | `/assets/:asset_id/categories/:category_id` | Add category to asset |
 | DELETE | `/assets/:asset_id/categories/:category_id` | Remove category from asset |
 | GET | `/categories` | List all categories |
@@ -95,6 +95,10 @@ The raw OpenAPI JSON spec is at `http://localhost:8080/api-doc/openapi.json`.
 | `available` | no | `true` or `false` (default `true`) |
 | `available_until` | no | ISO 8601 datetime after which the asset is unavailable |
 | `is_locked` | no | `true` or `false` — locked assets cannot be deleted (default `false`) |
+| `is_private` | no | `true` or `false` — asset is private to the uploader (default `true`) |
+| `public_read` | no | `true` or `false` — allow unauthenticated read (default `false`) |
+| `public_download` | no | `true` or `false` — allow unauthenticated download (default `false`) |
+| `public_write` | no | `true` or `false` — allow unauthenticated write (default `false`) |
 
 ```bash
 curl -X POST http://localhost:8080/assets/upload \
@@ -104,7 +108,7 @@ curl -X POST http://localhost:8080/assets/upload \
 
 ## Data Model
 
-- **Asset** — `id`, `name`, `description`, `asset_type`, `size` (bytes), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default `true`), `available_until` (nullable timestamptz), `is_locked` (bool, default `false`), timestamps
+- **Asset** — `id`, `name`, `description`, `asset_type`, `size` (bytes), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default `true`), `available_until` (nullable timestamptz), `is_locked` (bool, default `false`), `is_private` (bool, default `true`), `public_read`/`public_download`/`public_write` (bool, default `false`), timestamps
 - **Category** — `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), timestamps
 - **asset_categories** — M2M junction table linking assets to categories
 
