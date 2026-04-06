@@ -10,6 +10,7 @@ pub struct Config {
     pub s3_secret_access_key: String,
     pub s3_bucket: String,
     pub s3_region: String,
+    pub thumbnail_size: u32,
 }
 
 impl Config {
@@ -32,6 +33,10 @@ impl Config {
                 .unwrap_or_else(|_| "dam-assets".into()),
             s3_region: std::env::var("S3_REGION")
                 .unwrap_or_else(|_| "us-east-1".into()),
+            thumbnail_size: std::env::var("THUMBNAIL_SIZE")
+                .unwrap_or_else(|_| "256".into())
+                .parse()
+                .context("THUMBNAIL_SIZE must be a positive integer")?,
         })
     }
 

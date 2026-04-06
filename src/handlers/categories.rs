@@ -13,6 +13,14 @@ use crate::{
 
 // ── List all categories ───────────────────────────────────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/categories",
+    tag = "categories",
+    responses(
+        (status = 200, description = "List of all categories", body = Vec<Category>),
+    )
+)]
 pub async fn list_categories(State(state): State<AppState>) -> AppResult<Json<Vec<Category>>> {
     let client = state.db.get().await?;
     let rows = client
@@ -30,6 +38,18 @@ pub async fn list_categories(State(state): State<AppState>) -> AppResult<Json<Ve
 
 // ── Get one category with its direct sub-categories ──────────────────────────
 
+#[utoipa::path(
+    get,
+    path = "/categories/{id}",
+    tag = "categories",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Category ID"),
+    ),
+    responses(
+        (status = 200, description = "Category with its direct sub-categories", body = CategoryWithChildren),
+        (status = 404, description = "Category not found", body = ErrorResponse),
+    )
+)]
 pub async fn get_category(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -65,6 +85,16 @@ pub async fn get_category(
 
 // ── Create category ───────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    post,
+    path = "/categories",
+    tag = "categories",
+    request_body = CreateCategoryRequest,
+    responses(
+        (status = 201, description = "Category created", body = Category),
+        (status = 400, description = "Invalid request or parent category not found", body = ErrorResponse),
+    )
+)]
 pub async fn create_category(
     State(state): State<AppState>,
     Json(body): Json<CreateCategoryRequest>,
@@ -98,6 +128,20 @@ pub async fn create_category(
 
 // ── Update category ───────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    put,
+    path = "/categories/{id}",
+    tag = "categories",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Category ID"),
+    ),
+    request_body = UpdateCategoryRequest,
+    responses(
+        (status = 200, description = "Updated category", body = Category),
+        (status = 400, description = "Invalid update (e.g. self-referential parent)", body = ErrorResponse),
+        (status = 404, description = "Category not found", body = ErrorResponse),
+    )
+)]
 pub async fn update_category(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
@@ -145,6 +189,18 @@ pub async fn update_category(
 
 // ── Delete category ───────────────────────────────────────────────────────────
 
+#[utoipa::path(
+    delete,
+    path = "/categories/{id}",
+    tag = "categories",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Category ID"),
+    ),
+    responses(
+        (status = 204, description = "Category deleted"),
+        (status = 404, description = "Category not found", body = ErrorResponse),
+    )
+)]
 pub async fn delete_category(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
