@@ -365,6 +365,9 @@ pub async fn upload_asset(
         .upload(&storage_key, data, &content_type)
         .await?;
 
+    // Evict stale thumbnail so the next request regenerates from the new file
+    state.thumbnail_cache.write().await.remove(&id);
+
     let row = client
         .query_one(
             &format!("UPDATE assets SET storage_key = $1, size = $2 WHERE id = $3 RETURNING {ASSET_COLUMNS}"),
