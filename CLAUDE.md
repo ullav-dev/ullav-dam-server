@@ -49,7 +49,7 @@ src/
   error.rs         – AppError enum, ErrorResponse schema, impl IntoResponse
   models/
     asset.rs       – Asset, AssetWithCategories, CreateAssetRequest, UpdateAssetRequest
-    category.rs    – Category, CategoryWithChildren, CreateCategoryRequest, UpdateCategoryRequest
+    category.rs    – AccessLevel enum, Category, CategoryWithChildren, CreateCategoryRequest, UpdateCategoryRequest
   handlers/
     assets.rs      – CRUD + file upload/download + category membership + thumbnail endpoints
     categories.rs  – CRUD endpoints for categories
@@ -58,12 +58,13 @@ migrations/
   002_asset_metadata_fields.sql – Adds caption, keywords, creator, copyright_notice, available, available_until
   003_asset_is_locked.sql       – Adds is_locked (BOOLEAN NOT NULL DEFAULT FALSE)
   004_asset_visibility.sql      – Adds is_private (default true), public_read/download/write (default false)
+  005_category_access_level_creator.sql – Adds access_level enum (Private/Group/Global, default Private) and creator (nullable TEXT) to categories
 ```
 
 ## Data Model
 
 - **Asset** – `id`, `name`, `description`, `asset_type`, `size` (bytes, BIGINT), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default true), `available_until` (nullable timestamptz), `is_locked` (bool, default false), `is_private` (bool, default true), `public_read`/`public_download`/`public_write` (bool, default false), timestamps
-- **Category** – `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), timestamps
+- **Category** – `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), `access_level` (enum: `Private`/`Group`/`Global`, default `Private`), `creator` (nullable text), timestamps
 - **asset_categories** – M2M junction table (asset_id, category_id)
 
 ## API Routes

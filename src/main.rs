@@ -65,6 +65,7 @@ pub struct AppState {
         models::asset::AssetWithCategories,
         models::asset::CreateAssetRequest,
         models::asset::UpdateAssetRequest,
+        models::category::AccessLevel,
         models::category::Category,
         models::category::CategoryWithChildren,
         models::category::CreateCategoryRequest,

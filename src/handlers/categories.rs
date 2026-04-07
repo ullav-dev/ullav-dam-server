@@ -8,8 +8,11 @@ use uuid::Uuid;
 use crate::{
     AppState,
     error::{AppError, AppResult},
-    models::category::{Category, CategoryWithChildren, CreateCategoryRequest, UpdateCategoryRequest},
+    models::category::{AccessLevel, Category, CategoryWithChildren, CreateCategoryRequest, UpdateCategoryRequest},
 };
+
+const CATEGORY_COLUMNS: &str =
+    "id, name, description, parent_id, access_level, creator, created_at, updated_at";
 
 // ── List all categories ───────────────────────────────────────────────────────
 
@@ -25,9 +28,7 @@ pub async fn list_categories(State(state): State<AppState>) -> AppResult<Json<Ve
     let client = state.db.get().await?;
     let rows = client
         .query(
-            "SELECT id, name, description, parent_id, created_at, updated_at
-             FROM categories
-             ORDER BY name ASC",
+            &format!("SELECT {CATEGORY_COLUMNS} FROM categories ORDER BY name ASC"),
             &[],
         )
         .await?;
@@ -58,8 +59,7 @@ pub async fn get_category(
 
     let row = client
         .query_opt(
-            "SELECT id, name, description, parent_id, created_at, updated_at
-             FROM categories WHERE id = $1",
+            &format!("SELECT {CATEGORY_COLUMNS} FROM categories WHERE id = $1"),
             &[&id],
         )
         .await?
@@ -69,8 +69,7 @@ pub async fn get_category(
 
     let child_rows = client
         .query(
-            "SELECT id, name, description, parent_id, created_at, updated_at
-             FROM categories WHERE parent_id = $1 ORDER BY name ASC",
+            &format!("SELECT {CATEGORY_COLUMNS} FROM categories WHERE parent_id = $1 ORDER BY name ASC"),
             &[&id],
         )
         .await?;
@@ -114,12 +113,16 @@ pub async fn create_category(
         }
     }
 
+    let access_level = body.access_level.unwrap_or(AccessLevel::Private);
+
     let row = client
         .query_one(
-            "INSERT INTO categories (name, description, parent_id)
-             VALUES ($1, $2, $3)
-             RETURNING id, name, description, parent_id, created_at, updated_at",
-            &[&body.name, &body.description, &body.parent_id],
+            &format!(
+                "INSERT INTO categories (name, description, parent_id, access_level, creator)
+                 VALUES ($1, $2, $3, $4, $5)
+                 RETURNING {CATEGORY_COLUMNS}"
+            ),
+            &[&body.name, &body.description, &body.parent_id, &access_level, &body.creator],
         )
         .await?;
 
@@ -151,8 +154,7 @@ pub async fn update_category(
 
     let row = client
         .query_opt(
-            "SELECT id, name, description, parent_id, created_at, updated_at
-             FROM categories WHERE id = $1",
+            &format!("SELECT {CATEGORY_COLUMNS} FROM categories WHERE id = $1"),
             &[&id],
         )
         .await?
@@ -165,6 +167,8 @@ pub async fn update_category(
     // `None` in the patch body is treated as "keep current"; use UpdateCategoryRequest
     // with an explicit sentinel if you need to clear parent_id.
     let parent_id = body.parent_id.or(current.parent_id);
+    let access_level = body.access_level.unwrap_or(current.access_level);
+    let creator = body.creator.or(current.creator);
 
     // Prevent self-referential cycle at direct parent level
     if let Some(pid) = parent_id {
@@ -177,10 +181,14 @@ pub async fn update_category(
 
     let updated = client
         .query_one(
-            "UPDATE categories SET name = $1, description = $2, parent_id = $3
-             WHERE id = $4
-             RETURNING id, name, description, parent_id, created_at, updated_at",
-            &[&name, &description, &parent_id, &id],
+            &format!(
+                "UPDATE categories
+                 SET name = $1, description = $2, parent_id = $3,
+                     access_level = $4, creator = $5
+                 WHERE id = $6
+                 RETURNING {CATEGORY_COLUMNS}"
+            ),
+            &[&name, &description, &parent_id, &access_level, &creator, &id],
         )
         .await?;
 

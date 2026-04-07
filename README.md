@@ -109,7 +109,7 @@ curl -X POST http://localhost:8080/assets/upload \
 ## Data Model
 
 - **Asset** — `id`, `name`, `description`, `asset_type`, `size` (bytes), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default `true`), `available_until` (nullable timestamptz), `is_locked` (bool, default `false`), `is_private` (bool, default `true`), `public_read`/`public_download`/`public_write` (bool, default `false`), timestamps
-- **Category** — `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), timestamps
+- **Category** — `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), `access_level` (enum: `Private`/`Group`/`Global`, default `Private`), `creator` (nullable text), timestamps
 - **asset_categories** — M2M junction table linking assets to categories
 
 ## Environment Variables
