@@ -53,6 +53,7 @@ src/
   handlers/
     assets.rs      – CRUD + file upload/download + category membership + thumbnail endpoints
     categories.rs  – CRUD endpoints for categories
+    zip.rs         – POST /zip/upload: batch-imports a ZIP archive, creating categories from directories and assets from files
 migrations/
   001_initial.sql  – Schema: assets, categories (self-ref parent_id), asset_categories (M2M)
   002_asset_metadata_fields.sql – Adds caption, keywords, creator, copyright_notice, available, available_until
@@ -82,6 +83,7 @@ migrations/
 | GET | `/assets/:id/thumbnail` | Get resized thumbnail (PNG) or SVG fallback icon |
 | POST | `/assets/:asset_id/categories/:category_id` | Add category to asset |
 | DELETE | `/assets/:asset_id/categories/:category_id` | Remove category from asset |
+| POST | `/zip/upload` | Batch-import a ZIP archive — categories from directories, assets from files |
 | GET | `/categories` | List all categories |
 | POST | `/categories` | Create category |
 | GET | `/categories/:id` | Get category + direct sub-categories |
