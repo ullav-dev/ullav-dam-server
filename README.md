@@ -72,6 +72,7 @@ The raw OpenAPI JSON spec is at `http://localhost:8080/api-doc/openapi.json`.
 | GET | `/assets/:id/thumbnail` | Get resized thumbnail (PNG for images/PDFs/Office/iWork, SVG icon otherwise) |
 | POST | `/assets/:asset_id/categories/:category_id` | Add category to asset |
 | DELETE | `/assets/:asset_id/categories/:category_id` | Remove category from asset |
+| POST | `/zip/upload` | Batch-import a ZIP archive — creates categories from directories, uploads all files as assets |
 | GET | `/categories` | List all categories |
 | POST | `/categories` | Create category |
 | GET | `/categories/:id` | Get category with sub-categories |
@@ -109,7 +110,7 @@ curl -X POST http://localhost:8080/assets/upload \
 ## Data Model
 
 - **Asset** — `id`, `name`, `description`, `asset_type`, `size` (bytes), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default `true`), `available_until` (nullable timestamptz), `is_locked` (bool, default `false`), `is_private` (bool, default `true`), `public_read`/`public_download`/`public_write` (bool, default `false`), timestamps
-- **Category** — `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), `access_level` (enum: `Private`/`Group`/`Global`, default `Private`), `creator` (nullable text), timestamps
+- **Category** — `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), `access_level` (enum: `Private`/`Group`/`Global`, default `Private`), `creator` (nullable text — username of creator), timestamps. **Note**: any SQL query that SELECTs category rows and maps them through `Category::from` must include `creator` and `access_level` in the column list, or the handler will panic with an ECONNRESET at the client.
 - **asset_categories** — M2M junction table linking assets to categories
 
 ## Environment Variables
