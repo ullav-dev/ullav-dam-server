@@ -107,6 +107,23 @@ curl -X POST http://localhost:8080/assets/upload \
   -F "description=Profile photo"
 ```
 
+### Batch-import a ZIP archive
+
+`POST /zip/upload` accepts `multipart/form-data` with the following fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `file` | yes | The ZIP archive to import |
+| `creator` | no | Author / creator name — applied to all assets extracted from the archive |
+
+The archive's directory structure is mirrored as a category tree (root category named `<stem>-<YYYYMMDD-HHMMSS>`). Every file becomes an asset linked to its directory's category. macOS artifacts (`__MACOSX/`, `.DS_Store`, `._*`) are skipped. The ZIP file itself is never stored as an asset.
+
+```bash
+curl -X POST http://localhost:8080/zip/upload \
+  -F "file=@photos.zip" \
+  -F "creator=colin"
+```
+
 ## Data Model
 
 - **Asset** — `id`, `name`, `description`, `asset_type`, `size` (bytes), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default `true`), `available_until` (nullable timestamptz), `is_locked` (bool, default `false`), `is_private` (bool, default `true`), `public_read`/`public_download`/`public_write` (bool, default `false`), timestamps

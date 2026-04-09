@@ -110,4 +110,6 @@ migrations/
   - **Apple iWork** (Pages, Numbers, Keynote) — extracted from the ZIP archive's embedded QuickLook thumbnail (`QuickLook/Thumbnail.jpg` or `.png`) using the `zip` crate, then resized with the `image` crate.
   - **Everything else** (SVG, video, audio, pending uploads) — returns a type-appropriate SVG fallback icon immediately, no download attempted.
   - On any render failure the fallback icon is returned instead of an error. Successful PNGs are written to cache with `Cache-Control: public, max-age=86400`.
+- **Column list discipline:** any SQL query that SELECTs category rows and maps them through `Category::from` must include `access_level` and `creator` in the column list — omitting them causes a runtime panic (ECONNRESET at the client). Same applies to assets: `is_private`, `public_read`, `public_download`, `public_write` must be present. Use the `CATEGORY_COLUMNS` / `ASSET_COLUMNS` constants defined in each handler file rather than spelling out columns manually.
+- ZIP import (`POST /zip/upload`): accepts multipart with `file` (ZIP) and optional `creator` (string). Mirrors directory structure as a category tree; each file becomes an asset linked to its directory's category. macOS artifacts skipped. ZIP itself is not stored.
 - Branch policy: all development happens on `claude-work`; do not commit to `main`.
