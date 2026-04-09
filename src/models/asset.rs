@@ -277,6 +277,8 @@ mod tests {
             name: "Photos".to_string(),
             description: None,
             parent_id: None,
+            access_level: crate::models::category::AccessLevel::Private,
+            creator: None,
             created_at: cat_now,
             updated_at: cat_now,
         };

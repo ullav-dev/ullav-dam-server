@@ -49,21 +49,23 @@ src/
   error.rs         – AppError enum, ErrorResponse schema, impl IntoResponse
   models/
     asset.rs       – Asset, AssetWithCategories, CreateAssetRequest, UpdateAssetRequest
-    category.rs    – Category, CategoryWithChildren, CreateCategoryRequest, UpdateCategoryRequest
+    category.rs    – AccessLevel enum, Category, CategoryWithChildren, CreateCategoryRequest, UpdateCategoryRequest
   handlers/
     assets.rs      – CRUD + file upload/download + category membership + thumbnail endpoints
     categories.rs  – CRUD endpoints for categories
+    zip.rs         – POST /zip/upload: batch-imports a ZIP archive, creating categories from directories and assets from files
 migrations/
   001_initial.sql  – Schema: assets, categories (self-ref parent_id), asset_categories (M2M)
   002_asset_metadata_fields.sql – Adds caption, keywords, creator, copyright_notice, available, available_until
   003_asset_is_locked.sql       – Adds is_locked (BOOLEAN NOT NULL DEFAULT FALSE)
   004_asset_visibility.sql      – Adds is_private (default true), public_read/download/write (default false)
+  005_category_access_level_creator.sql – Adds access_level enum (Private/Group/Global, default Private) and creator (nullable TEXT) to categories
 ```
 
 ## Data Model
 
 - **Asset** – `id`, `name`, `description`, `asset_type`, `size` (bytes, BIGINT), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default true), `available_until` (nullable timestamptz), `is_locked` (bool, default false), `is_private` (bool, default true), `public_read`/`public_download`/`public_write` (bool, default false), timestamps
-- **Category** – `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), timestamps
+- **Category** – `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), `access_level` (enum: `Private`/`Group`/`Global`, default `Private`), `creator` (nullable text), timestamps
 - **asset_categories** – M2M junction table (asset_id, category_id)
 
 ## API Routes
@@ -81,6 +83,7 @@ migrations/
 | GET | `/assets/:id/thumbnail` | Get resized thumbnail (PNG) or SVG fallback icon |
 | POST | `/assets/:asset_id/categories/:category_id` | Add category to asset |
 | DELETE | `/assets/:asset_id/categories/:category_id` | Remove category from asset |
+| POST | `/zip/upload` | Batch-import a ZIP archive — categories from directories, assets from files |
 | GET | `/categories` | List all categories |
 | POST | `/categories` | Create category |
 | GET | `/categories/:id` | Get category + direct sub-categories |
@@ -107,4 +110,6 @@ migrations/
   - **Apple iWork** (Pages, Numbers, Keynote) — extracted from the ZIP archive's embedded QuickLook thumbnail (`QuickLook/Thumbnail.jpg` or `.png`) using the `zip` crate, then resized with the `image` crate.
   - **Everything else** (SVG, video, audio, pending uploads) — returns a type-appropriate SVG fallback icon immediately, no download attempted.
   - On any render failure the fallback icon is returned instead of an error. Successful PNGs are written to cache with `Cache-Control: public, max-age=86400`.
+- **Column list discipline:** any SQL query that SELECTs category rows and maps them through `Category::from` must include `access_level` and `creator` in the column list — omitting them causes a runtime panic (ECONNRESET at the client). Same applies to assets: `is_private`, `public_read`, `public_download`, `public_write` must be present. Use the `CATEGORY_COLUMNS` / `ASSET_COLUMNS` constants defined in each handler file rather than spelling out columns manually.
+- ZIP import (`POST /zip/upload`): accepts multipart with `file` (ZIP) and optional `creator` (string). Mirrors directory structure as a category tree; each file becomes an asset linked to its directory's category. macOS artifacts skipped. ZIP itself is not stored.
 - Branch policy: all development happens on `claude-work`; do not commit to `main`.

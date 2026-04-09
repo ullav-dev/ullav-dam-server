@@ -1,8 +1,20 @@
 use chrono::{DateTime, Utc};
+use postgres_types::{FromSql, ToSql};
 use serde::{Deserialize, Serialize};
 use tokio_postgres::Row;
 use utoipa::ToSchema;
 use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema, ToSql, FromSql)]
+#[postgres(name = "access_level")]
+pub enum AccessLevel {
+    #[postgres(name = "Private")]
+    Private,
+    #[postgres(name = "Group")]
+    Group,
+    #[postgres(name = "Global")]
+    Global,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Category {
@@ -10,6 +22,8 @@ pub struct Category {
     pub name: String,
     pub description: Option<String>,
     pub parent_id: Option<Uuid>,
+    pub access_level: AccessLevel,
+    pub creator: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -21,6 +35,8 @@ impl From<&Row> for Category {
             name: row.get("name"),
             description: row.get("description"),
             parent_id: row.get("parent_id"),
+            access_level: row.get("access_level"),
+            creator: row.get("creator"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -39,6 +55,9 @@ pub struct CreateCategoryRequest {
     pub name: String,
     pub description: Option<String>,
     pub parent_id: Option<Uuid>,
+    /// Defaults to `Private` if omitted.
+    pub access_level: Option<AccessLevel>,
+    pub creator: Option<String>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -46,6 +65,8 @@ pub struct UpdateCategoryRequest {
     pub name: Option<String>,
     pub description: Option<String>,
     pub parent_id: Option<Uuid>,
+    pub access_level: Option<AccessLevel>,
+    pub creator: Option<String>,
 }
 
 #[cfg(test)]
@@ -123,6 +144,8 @@ mod tests {
             name: "Videos".to_string(),
             description: Some("Video assets".to_string()),
             parent_id: None,
+            access_level: AccessLevel::Private,
+            creator: Some("colin".to_string()),
             created_at: now,
             updated_at: now,
         }
@@ -135,6 +158,8 @@ mod tests {
         assert_eq!(json["name"], "Videos");
         assert_eq!(json["description"], "Video assets");
         assert!(json["parent_id"].is_null());
+        assert_eq!(json["access_level"], "Private");
+        assert_eq!(json["creator"], "colin");
         assert!(json["id"].is_string());
         assert!(json["created_at"].is_string());
         assert!(json["updated_at"].is_string());
@@ -149,6 +174,8 @@ mod tests {
             name: "Sub".to_string(),
             description: None,
             parent_id: Some(parent_id),
+            access_level: AccessLevel::Group,
+            creator: None,
             created_at: now,
             updated_at: now,
         };
@@ -181,6 +208,8 @@ mod tests {
             name: "Action".to_string(),
             description: None,
             parent_id: Some(Uuid::new_v4()),
+            access_level: AccessLevel::Global,
+            creator: Some("colin".to_string()),
             created_at: child_now,
             updated_at: child_now,
         };

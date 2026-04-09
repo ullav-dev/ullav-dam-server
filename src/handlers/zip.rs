@@ -12,12 +12,13 @@ use crate::{
     models::{asset::Asset, category::Category},
 };
 
-const CATEGORY_COLUMNS: &str = "id, name, description, parent_id, created_at, updated_at";
+const CATEGORY_COLUMNS: &str =
+    "id, name, description, parent_id, access_level, creator, created_at, updated_at";
 
 const ASSET_COLUMNS: &str =
     "id, name, description, asset_type, size, storage_key, bucket, \
      caption, keywords, creator, copyright_notice, available, available_until, \
-     is_locked, created_at, updated_at";
+     is_locked, is_private, public_read, public_download, public_write, created_at, updated_at";
 
 #[derive(Serialize)]
 pub struct ZipUploadResult {

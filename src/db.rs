@@ -30,6 +30,9 @@ pub async fn run_migrations(pool: &Pool) -> Result<()> {
     let sql = include_str!("../migrations/004_asset_visibility.sql");
     client.batch_execute(sql).await.context("Failed to run migration 004")?;
 
+    let sql = include_str!("../migrations/005_category_access_level_creator.sql");
+    client.batch_execute(sql).await.context("Failed to run migration 005")?;
+
     tracing::info!("Migrations applied successfully");
     Ok(())
 }
