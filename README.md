@@ -130,6 +130,17 @@ curl -X POST http://localhost:8080/zip/upload \
 - **Category** — `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), `access_level` (enum: `Private`/`Group`/`Global`, default `Private`), `creator` (nullable text — username of creator), timestamps. **Note**: any SQL query that SELECTs category rows and maps them through `Category::from` must include `creator` and `access_level` in the column list, or the handler will panic with an ECONNRESET at the client.
 - **asset_categories** — M2M junction table linking assets to categories
 
+## Production Deployment
+
+```bash
+docker network create ullav-net   # one-time, shared across Ullav services
+cp .env.prod.example .env.prod
+# Fill in .env.prod with real credentials
+docker compose -f docker-compose-prod.yaml up -d --build
+```
+
+The image includes LibreOffice (Office thumbnail conversion) and a prebuilt PDFium binary (PDF thumbnail rendering). MinIO is configured via env vars and is expected to be running separately on `ullav-net`.
+
 ## Environment Variables
 
 | Variable | Required | Default | Description |

@@ -54,6 +54,10 @@ src/
     assets.rs      – CRUD + file upload/download + category membership + thumbnail endpoints
     categories.rs  – CRUD endpoints for categories
     zip.rs         – POST /zip/upload: batch-imports a ZIP archive, creating categories from directories and assets from files
+Dockerfile              – multi-stage build: rust:1.88-slim builder → debian:bookworm-slim runtime
+                          Downloads prebuilt PDFium binary; installs LibreOffice for Office thumbnails
+docker-compose-prod.yaml – production compose: postgres:16-alpine db + app on ullav-net external network
+.env.prod.example       – template for production environment variables
 migrations/
   001_initial.sql  – Schema: assets, categories (self-ref parent_id), asset_categories (M2M)
   002_asset_metadata_fields.sql – Adds caption, keywords, creator, copyright_notice, available, available_until

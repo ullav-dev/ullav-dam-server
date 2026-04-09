@@ -1,0 +1,37 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${DATABASE_USER:-dam}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:?DATABASE_PASSWORD is required}
+      POSTGRES_DB: ${DATABASE_NAME:-dam}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - ullav-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-dam} -d ${DATABASE_NAME:-dam}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    build: .
+    image: ghcr.io/ullav-dev/ullav-dam-server:latest
+    container_name: ullav-dam-server
+    init: true
+    env_file: .env.prod
+    networks:
+      - ullav-net
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+networks:
+  ullav-net:
+    external: true
+
+volumes:
+  postgres_data:
