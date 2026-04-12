@@ -7,6 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    auth::AuthUser,
     error::{AppError, AppResult},
     models::category::{AccessLevel, Category, CategoryWithChildren, CreateCategoryRequest, UpdateCategoryRequest},
 };
@@ -24,7 +25,8 @@ const CATEGORY_COLUMNS: &str =
         (status = 200, description = "List of all categories", body = Vec<Category>),
     )
 )]
-pub async fn list_categories(State(state): State<AppState>) -> AppResult<Json<Vec<Category>>> {
+pub async fn list_categories(auth_user: AuthUser, State(state): State<AppState>) -> AppResult<Json<Vec<Category>>> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
     let rows = client
         .query(
@@ -52,9 +54,11 @@ pub async fn list_categories(State(state): State<AppState>) -> AppResult<Json<Ve
     )
 )]
 pub async fn get_category(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<CategoryWithChildren>> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
 
     let row = client
@@ -95,9 +99,11 @@ pub async fn get_category(
     )
 )]
 pub async fn create_category(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     Json(body): Json<CreateCategoryRequest>,
 ) -> AppResult<(StatusCode, Json<Category>)> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
 
     // Validate parent exists if provided
@@ -146,10 +152,12 @@ pub async fn create_category(
     )
 )]
 pub async fn update_category(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateCategoryRequest>,
 ) -> AppResult<Json<Category>> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
 
     let row = client
@@ -210,9 +218,11 @@ pub async fn update_category(
     )
 )]
 pub async fn delete_category(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> AppResult<StatusCode> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
 
     let result = client

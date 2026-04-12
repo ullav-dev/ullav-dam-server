@@ -8,6 +8,7 @@ use zip::ZipArchive;
 
 use crate::{
     AppState,
+    auth::AuthUser,
     error::{AppError, AppResult},
     models::{asset::Asset, category::Category},
 };
@@ -52,9 +53,16 @@ fn is_artifact(path: &str) -> bool {
 /// asset linked to its directory's category, and returns the full result.
 /// The ZIP itself is never stored as an asset.
 pub async fn upload_zip(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     mut multipart: axum::extract::Multipart,
 ) -> AppResult<(StatusCode, Json<ZipUploadResult>)> {
+    // ZIP extraction creates assets of various types; require Full access
+    if auth_user.dam_access != crate::auth::DamAccess::Full {
+        return Err(AppError::Forbidden(
+            "ZIP import requires a Professional subscription or higher.".into(),
+        ));
+    }
     // ── 1. Parse multipart ───────────────────────────────────────────────────
     let mut file_bytes: Option<bytes::Bytes> = None;
     let mut file_name = "archive".to_string();
