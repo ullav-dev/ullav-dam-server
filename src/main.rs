@@ -14,6 +14,7 @@ use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
+mod auth;
 mod config;
 mod db;
 mod error;
@@ -33,6 +34,7 @@ pub struct AppState {
     pub storage: StorageClient,
     pub thumbnail_cache: ThumbnailCache,
     pub thumbnail_size: u32,
+    pub jwt_secret: String,
 }
 
 #[derive(OpenApi)]
@@ -99,11 +101,14 @@ async fn main() -> Result<()> {
     // Storage
     let storage = StorageClient::new(&cfg).await?;
 
+    let addr: std::net::SocketAddr = cfg.bind_addr().parse()?;
+
     let state = AppState {
         db: pool,
         storage,
         thumbnail_cache: Arc::new(RwLock::new(HashMap::new())),
         thumbnail_size: cfg.thumbnail_size,
+        jwt_secret: cfg.jwt_secret,
     };
 
     let app = Router::new()
@@ -143,7 +148,6 @@ async fn main() -> Result<()> {
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
-    let addr: std::net::SocketAddr = cfg.bind_addr().parse()?;
     tracing::info!("Listening on {addr}");
 
     let listener = tokio::net::TcpListener::bind(addr).await?;

@@ -11,6 +11,7 @@ pub struct Config {
     pub s3_bucket: String,
     pub s3_region: String,
     pub thumbnail_size: u32,
+    pub jwt_secret: String,
 }
 
 impl Config {
@@ -37,6 +38,8 @@ impl Config {
                 .unwrap_or_else(|_| "256".into())
                 .parse()
                 .context("THUMBNAIL_SIZE must be a positive integer")?,
+            jwt_secret: std::env::var("JWT_SECRET")
+                .context("JWT_SECRET is required")?,
         })
     }
 

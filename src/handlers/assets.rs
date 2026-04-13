@@ -171,6 +171,7 @@ fn extract_iwork_thumbnail(data: &[u8], size: u32) -> Result<bytes::Bytes, Strin
 
 use crate::{
     AppState,
+    auth::AuthUser,
     error::{AppError, AppResult},
     models::asset::{Asset, AssetWithCategories, CreateAssetRequest, UpdateAssetRequest},
     models::category::Category,
@@ -192,7 +193,8 @@ const ASSET_COLUMNS: &str =
         (status = 200, description = "List of all assets", body = Vec<Asset>),
     )
 )]
-pub async fn list_assets(State(state): State<AppState>) -> AppResult<Json<Vec<Asset>>> {
+pub async fn list_assets(auth_user: AuthUser, State(state): State<AppState>) -> AppResult<Json<Vec<Asset>>> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
     let rows = client
         .query(
@@ -220,9 +222,11 @@ pub async fn list_assets(State(state): State<AppState>) -> AppResult<Json<Vec<As
     )
 )]
 pub async fn get_asset(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> AppResult<Json<AssetWithCategories>> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
 
     let row = client
@@ -263,9 +267,11 @@ pub async fn get_asset(
     )
 )]
 pub async fn create_asset(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     Json(body): Json<CreateAssetRequest>,
 ) -> AppResult<(StatusCode, Json<Asset>)> {
+    auth_user.require_mime_allowed(&body.asset_type)?;
     let client = state.db.get().await?;
 
     // Placeholder storage key; real key assigned on upload
@@ -323,10 +329,12 @@ pub async fn create_asset(
     )
 )]
 pub async fn upload_asset(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     mut multipart: Multipart,
 ) -> AppResult<Json<Asset>> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
 
     // Verify asset exists
@@ -438,10 +446,12 @@ pub async fn download_asset(
     )
 )]
 pub async fn update_asset(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
     Json(body): Json<UpdateAssetRequest>,
 ) -> AppResult<Json<Asset>> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
 
     let row = client
@@ -509,9 +519,11 @@ pub async fn update_asset(
     )
 )]
 pub async fn delete_asset(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> AppResult<StatusCode> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
 
     let row = client
@@ -593,6 +605,7 @@ struct UploadAssetForm {
     )
 )]
 pub async fn create_and_upload_asset(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     mut multipart: Multipart,
 ) -> AppResult<(StatusCode, Json<Asset>)> {
@@ -700,6 +713,9 @@ pub async fn create_and_upload_asset(
             .to_string()
     });
 
+    // Enforce plan-based MIME restriction before writing anything
+    auth_user.require_mime_allowed(&asset_type)?;
+
     let available = available.unwrap_or(true);
     let is_locked = is_locked.unwrap_or(false);
     let is_private = is_private.unwrap_or(true);
@@ -749,9 +765,11 @@ pub async fn create_and_upload_asset(
     )
 )]
 pub async fn add_category_to_asset(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     Path((asset_id, category_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<StatusCode> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
 
     client
@@ -778,9 +796,11 @@ pub async fn add_category_to_asset(
     )
 )]
 pub async fn remove_category_from_asset(
+    auth_user: AuthUser,
     State(state): State<AppState>,
     Path((asset_id, category_id)): Path<(Uuid, Uuid)>,
 ) -> AppResult<StatusCode> {
+    auth_user.require_access()?;
     let client = state.db.get().await?;
 
     client
