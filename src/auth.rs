@@ -59,9 +59,12 @@ pub enum DamAccess {
 /// Authenticated DAM user extracted from the `Authorization: Bearer` header.
 #[derive(Debug, Clone)]
 pub struct AuthUser {
-    #[allow(dead_code)]
     pub user_id: String,
     pub dam_access: DamAccess,
+    /// Maximum number of assets the user may own. `None` = unlimited.
+    pub asset_limit: Option<i64>,
+    /// Maximum total bytes the user may store. `None` = unlimited.
+    pub storage_limit_bytes: Option<i64>,
 }
 
 #[axum::async_trait]
@@ -94,37 +97,39 @@ where
         .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
 
         // Admins bypass all subscription checks and always get full access.
-        let dam_access = if claims.roles.iter().any(|r| r == "admin") {
-            DamAccess::Full
-        } else {
-            // Determine DAM access: check comad subscription first, fall back to clann.
-            let comad_access = claims.subscriptions.get("comad")
-                .filter(|s| s.status == "active" || s.status == "trialing")
-                .map(|s| match s.tier.as_str() {
-                    "team" | "enterprise" => DamAccess::Full,
-                    "individual" => DamAccess::ImagesOnly,
-                    _ => DamAccess::None,
-                });
+        let (dam_access, asset_limit, storage_limit_bytes) =
+            if claims.roles.iter().any(|r| r == "admin") {
+                (DamAccess::Full, None, None)
+            } else {
+                // Resolve the effective tier from comad first, then clann fallback.
+                let comad_tier = claims.subscriptions.get("comad")
+                    .filter(|s| s.status == "active" || s.status == "trialing")
+                    .map(|s| s.tier.as_str());
 
-            let clann_access = claims.subscriptions.get("clann")
-                .filter(|s| s.status == "active" || s.status == "trialing")
-                .map(|s| match s.tier.as_str() {
-                    "professional" | "enterprise" => DamAccess::Full,
-                    "family" => DamAccess::ImagesOnly,
-                    _ => DamAccess::None,
-                });
+                let clann_tier = claims.subscriptions.get("clann")
+                    .filter(|s| s.status == "active" || s.status == "trialing")
+                    .map(|s| s.tier.as_str());
 
-            // Use the highest access level from either subscription.
-            match (comad_access, clann_access) {
-                (Some(DamAccess::Full), _) | (_, Some(DamAccess::Full)) => DamAccess::Full,
-                (Some(DamAccess::ImagesOnly), _) | (_, Some(DamAccess::ImagesOnly)) => DamAccess::ImagesOnly,
-                _ => DamAccess::None,
-            }
-        };
+                // Limits per tier (comad-native tiers take precedence).
+                let (access, assets, storage) = match comad_tier {
+                    Some("enterprise") => (DamAccess::Full, None, None),
+                    Some("team") => (DamAccess::Full, Some(10_000), Some(50 * 1024 * 1024 * 1024)),
+                    Some("individual") => (DamAccess::ImagesOnly, Some(500), Some(1024 * 1024 * 1024)),
+                    _ => match clann_tier {
+                        Some("enterprise") => (DamAccess::Full, None, None),
+                        Some("professional") => (DamAccess::Full, Some(10_000), Some(50 * 1024 * 1024 * 1024)),
+                        Some("family") => (DamAccess::ImagesOnly, Some(500), Some(1024 * 1024 * 1024)),
+                        _ => (DamAccess::None, Some(0), Some(0)),
+                    },
+                };
+                (access, assets, storage)
+            };
 
         Ok(AuthUser {
             user_id: claims.sub,
             dam_access,
+            asset_limit,
+            storage_limit_bytes,
         })
     }
 }
@@ -150,6 +155,33 @@ impl AuthUser {
                  Upgrade to Comad Team for all file types."
                     .into(),
             ));
+        }
+        Ok(())
+    }
+
+    /// Returns `Err(Forbidden)` if `current_count` is at or above the asset limit.
+    pub fn require_asset_quota(&self, current_count: i64) -> AppResult<()> {
+        if let Some(limit) = self.asset_limit {
+            if current_count >= limit {
+                return Err(AppError::Forbidden(format!(
+                    "Asset limit of {limit} reached for your plan. \
+                     Upgrade to add more assets."
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns `Err(Forbidden)` if `used_bytes + new_bytes` exceeds the storage limit.
+    pub fn require_storage_quota(&self, used_bytes: i64, new_bytes: i64) -> AppResult<()> {
+        if let Some(limit) = self.storage_limit_bytes {
+            if used_bytes + new_bytes > limit {
+                let limit_mb = limit / (1024 * 1024);
+                return Err(AppError::Forbidden(format!(
+                    "Storage limit of {limit_mb} MB reached for your plan. \
+                     Upgrade for more storage."
+                )));
+            }
         }
         Ok(())
     }

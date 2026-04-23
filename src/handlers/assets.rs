@@ -178,7 +178,7 @@ use crate::{
 };
 
 const ASSET_COLUMNS: &str =
-    "id, name, description, asset_type, size, storage_key, bucket, \
+    "id, owner_id, name, description, asset_type, size, storage_key, bucket, \
      caption, keywords, creator, copyright_notice, available, available_until, \
      is_locked, is_private, public_read, public_download, public_write, \
      created_at, updated_at";
@@ -274,7 +274,16 @@ pub async fn create_asset(
     auth_user.require_mime_allowed(&body.asset_type)?;
     let client = state.db.get().await?;
 
-    // Placeholder storage key; real key assigned on upload
+    // Enforce asset count quota
+    let count_row = client
+        .query_one(
+            "SELECT COUNT(*) AS n FROM assets WHERE owner_id = $1",
+            &[&auth_user.user_id],
+        )
+        .await?;
+    let count: i64 = count_row.get("n");
+    auth_user.require_asset_quota(count)?;
+
     let storage_key = format!("pending/{}", Uuid::new_v4());
     let available = body.available.unwrap_or(true);
 
@@ -282,13 +291,14 @@ pub async fn create_asset(
         .query_one(
             &format!(
                 "INSERT INTO assets \
-                 (name, description, asset_type, size, storage_key, bucket, \
+                 (owner_id, name, description, asset_type, size, storage_key, bucket, \
                   caption, keywords, creator, copyright_notice, available, available_until, \
                   is_locked, is_private, public_read, public_download, public_write) \
-                 VALUES ($1, $2, $3, 0, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
+                 VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
+                &auth_user.user_id,
                 &body.name,
                 &body.description,
                 &body.asset_type,
@@ -337,11 +347,12 @@ pub async fn upload_asset(
     auth_user.require_access()?;
     let client = state.db.get().await?;
 
-    // Verify asset exists
-    let _row = client
-        .query_opt("SELECT id FROM assets WHERE id = $1", &[&id])
+    // Verify asset exists and fetch current size for storage delta calculation
+    let existing_row = client
+        .query_opt("SELECT size FROM assets WHERE id = $1", &[&id])
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Asset {id} not found")))?;
+    let current_size: i64 = existing_row.get("size");
 
     // Read the first field from multipart
     let field = multipart
@@ -367,6 +378,16 @@ pub async fn upload_asset(
 
     let size = data.len() as i64;
     let storage_key = format!("assets/{}/{}", id, file_name);
+
+    // Enforce storage quota: total used - old size + new size must not exceed limit
+    let usage_row = client
+        .query_one(
+            "SELECT COALESCE(SUM(size), 0) AS used FROM assets WHERE owner_id = $1",
+            &[&auth_user.user_id],
+        )
+        .await?;
+    let used_bytes: i64 = usage_row.get("used");
+    auth_user.require_storage_quota(used_bytes - current_size, size)?;
 
     state
         .storage
@@ -725,22 +746,43 @@ pub async fn create_and_upload_asset(
     let storage_key = format!("assets/{}/{}", asset_id, resolved_name);
     let size = file_data.len() as i64;
 
+    let client = state.db.get().await?;
+
+    // Enforce asset count quota
+    let count_row = client
+        .query_one(
+            "SELECT COUNT(*) AS n FROM assets WHERE owner_id = $1",
+            &[&auth_user.user_id],
+        )
+        .await?;
+    let count: i64 = count_row.get("n");
+    auth_user.require_asset_quota(count)?;
+
+    // Enforce storage quota
+    let usage_row = client
+        .query_one(
+            "SELECT COALESCE(SUM(size), 0) AS used FROM assets WHERE owner_id = $1",
+            &[&auth_user.user_id],
+        )
+        .await?;
+    let used_bytes: i64 = usage_row.get("used");
+    auth_user.require_storage_quota(used_bytes, size)?;
+
     // Upload first; on failure nothing is written to the DB
     state.storage.upload(&storage_key, file_data, &content_type_hdr).await?;
 
-    let client = state.db.get().await?;
     let row = client
         .query_one(
             &format!(
                 "INSERT INTO assets \
-                 (id, name, description, asset_type, size, storage_key, bucket, \
+                 (id, owner_id, name, description, asset_type, size, storage_key, bucket, \
                   caption, keywords, creator, copyright_notice, available, available_until, \
                   is_locked, is_private, public_read, public_download, public_write) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
-                &asset_id, &name, &description, &asset_type, &size, &storage_key, &state.storage.bucket,
+                &asset_id, &auth_user.user_id, &name, &description, &asset_type, &size, &storage_key, &state.storage.bucket,
                 &caption, &keywords, &creator, &copyright_notice, &available, &available_until,
                 &is_locked, &is_private, &public_read, &public_download, &public_write,
             ],

@@ -9,6 +9,7 @@ use crate::models::category::Category;
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 pub struct Asset {
     pub id: Uuid,
+    pub owner_id: String,
     pub name: String,
     pub description: Option<String>,
     pub asset_type: String,
@@ -34,6 +35,7 @@ impl From<&Row> for Asset {
     fn from(row: &Row) -> Self {
         Self {
             id: row.get("id"),
+            owner_id: row.get("owner_id"),
             name: row.get("name"),
             description: row.get("description"),
             asset_type: row.get("asset_type"),
@@ -186,6 +188,7 @@ mod tests {
         let now = chrono::Utc::now();
         Asset {
             id: Uuid::new_v4(),
+            owner_id: "user-123".to_string(),
             name: "test.jpg".to_string(),
             description: Some("a test image".to_string()),
             asset_type: "image".to_string(),
@@ -228,6 +231,7 @@ mod tests {
         let now = chrono::Utc::now();
         let asset = Asset {
             id: Uuid::new_v4(),
+            owner_id: "user-123".to_string(),
             name: "no-desc.pdf".to_string(),
             description: None,
             asset_type: "document".to_string(),
