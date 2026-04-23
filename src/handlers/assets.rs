@@ -6,6 +6,7 @@ use axum::{
     Json,
 };
 use image::{ImageFormat, imageops::FilterType};
+use serde::Serialize;
 use std::io::Cursor;
 use uuid::Uuid;
 
@@ -982,4 +983,52 @@ fn build_thumbnail_response(data: bytes::Bytes, content_type: &'static str) -> R
         .header(header::CACHE_CONTROL, "public, max-age=86400")
         .body(Body::from(data))
         .expect("static header values are always valid")
+}
+
+// ── Usage summary ─────────────────────────────────────────────────────────────
+
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct UsageSummary {
+    /// Total bytes stored by this user across all assets.
+    pub used_bytes: i64,
+    /// Number of assets owned by this user.
+    pub asset_count: i64,
+    /// Maximum bytes allowed by the plan. `null` means unlimited.
+    pub storage_limit_bytes: Option<i64>,
+    /// Maximum asset count allowed by the plan. `null` means unlimited.
+    pub asset_limit: Option<i64>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/usage",
+    tag = "assets",
+    responses(
+        (status = 200, description = "Current usage totals and plan limits", body = UsageSummary),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "No DAM access"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn get_usage(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+) -> AppResult<Json<UsageSummary>> {
+    auth_user.require_access()?;
+    let client = state.db.get().await?;
+
+    let row = client
+        .query_one(
+            "SELECT COUNT(*) AS asset_count, COALESCE(SUM(size), 0) AS used_bytes \
+             FROM assets WHERE owner_id = $1",
+            &[&auth_user.user_id],
+        )
+        .await?;
+
+    Ok(Json(UsageSummary {
+        asset_count: row.get("asset_count"),
+        used_bytes: row.get("used_bytes"),
+        storage_limit_bytes: auth_user.storage_limit_bytes,
+        asset_limit: auth_user.asset_limit,
+    }))
 }
