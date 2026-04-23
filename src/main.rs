@@ -56,6 +56,7 @@ pub struct AppState {
         handlers::assets::get_thumbnail,
         handlers::assets::add_category_to_asset,
         handlers::assets::remove_category_from_asset,
+        handlers::assets::get_usage,
         handlers::categories::list_categories,
         handlers::categories::get_category,
         handlers::categories::create_category,
@@ -67,6 +68,7 @@ pub struct AppState {
         models::asset::AssetWithCategories,
         models::asset::CreateAssetRequest,
         models::asset::UpdateAssetRequest,
+        handlers::assets::UsageSummary,
         models::category::AccessLevel,
         models::category::Category,
         models::category::CategoryWithChildren,
@@ -115,6 +117,7 @@ async fn main() -> Result<()> {
         // Docs
         .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", ApiDoc::openapi()))
         // Assets
+        .route("/usage", get(handlers::assets::get_usage))
         .route("/assets", get(handlers::assets::list_assets).post(handlers::assets::create_asset))
         .route(
             "/assets/:id",
