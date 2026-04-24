@@ -138,7 +138,7 @@ pub async fn create_category(
                  VALUES ($1, $2, $3, $4, $5)
                  RETURNING {CATEGORY_COLUMNS}"
             ),
-            &[&body.name, &body.description, &body.parent_id, &access_level, &body.creator],
+            &[&body.name, &body.description, &body.parent_id, &access_level, &auth_user.user_id],
         )
         .await?;
 
