@@ -57,6 +57,10 @@ Swagger UI is available at **`http://localhost:8080/docs`** when the server is r
 
 The raw OpenAPI JSON spec is at `http://localhost:8080/api-doc/openapi.json`.
 
+## Authentication
+
+All endpoints require a JWT in the `Authorization: Bearer <token>` header, issued by `ullav-user-management`. The token must include a `subscriptions` claim granting Comad DAM access (or an `admin` role to bypass plan checks). Plan tiers determine which file types may be uploaded and enforce per-user asset count and storage quotas.
+
 ## API Routes
 
 | Method | Path | Description |
@@ -66,12 +70,13 @@ The raw OpenAPI JSON spec is at `http://localhost:8080/api-doc/openapi.json`.
 | POST | `/assets/upload` | Create asset + upload file in one request |
 | GET | `/assets/:id` | Get asset with its categories |
 | PUT | `/assets/:id` | Update asset metadata |
-| DELETE | `/assets/:id` | Delete asset and remove from storage (returns 403 if locked) |
+| DELETE | `/assets/:id` | Delete asset and remove from storage (403 if locked) |
 | POST | `/assets/:id/upload` | Upload file for an existing asset |
 | GET | `/assets/:id/download` | Download asset file |
 | GET | `/assets/:id/thumbnail` | Get resized thumbnail (PNG for images/PDFs/Office/iWork, SVG icon otherwise) |
 | POST | `/assets/:asset_id/categories/:category_id` | Add category to asset |
 | DELETE | `/assets/:asset_id/categories/:category_id` | Remove category from asset |
+| GET | `/usage` | Current asset count, bytes used, and plan limits for the authenticated user |
 | POST | `/zip/upload` | Batch-import a ZIP archive — creates categories from directories, uploads all files as assets |
 | GET | `/categories` | List all categories |
 | POST | `/categories` | Create category |
@@ -126,7 +131,7 @@ curl -X POST http://localhost:8080/zip/upload \
 
 ## Data Model
 
-- **Asset** — `id`, `name`, `description`, `asset_type`, `size` (bytes), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default `true`), `available_until` (nullable timestamptz), `is_locked` (bool, default `false`), `is_private` (bool, default `true`), `public_read`/`public_download`/`public_write` (bool, default `false`), timestamps
+- **Asset** — `id`, `owner_id` (JWT `sub` of the uploader), `name`, `description`, `asset_type`, `size` (bytes), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default `true`), `available_until` (nullable timestamptz), `is_locked` (bool, default `false`), `is_private` (bool, default `true`), `public_read`/`public_download`/`public_write` (bool, default `false`), timestamps
 - **Category** — `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), `access_level` (enum: `Private`/`Group`/`Global`, default `Private`), `creator` (nullable text — username of creator), timestamps. **Note**: any SQL query that SELECTs category rows and maps them through `Category::from` must include `creator` and `access_level` in the column list, or the handler will panic with an ECONNRESET at the client.
 - **asset_categories** — M2M junction table linking assets to categories
 
@@ -146,6 +151,7 @@ The image includes LibreOffice (Office thumbnail conversion) and a prebuilt PDFi
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | yes | — | PostgreSQL connection string |
+| `JWT_SECRET` | yes | — | HS256 secret shared with `ullav-user-management` |
 | `S3_ENDPOINT` | yes | — | S3/MinIO endpoint URL |
 | `S3_ACCESS_KEY_ID` | yes | — | S3 access key |
 | `S3_SECRET_ACCESS_KEY` | yes | — | S3 secret key |
