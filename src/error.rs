@@ -43,7 +43,7 @@ impl IntoResponse for AppError {
             AppError::BadRequest(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
             AppError::Forbidden(msg) => (StatusCode::FORBIDDEN, msg.clone()),
             AppError::Database(e) => {
-                tracing::error!("Database error: {e}");
+                tracing::error!("Database error: {e:#?}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Database error".into())
             }
             AppError::Pool(e) => {

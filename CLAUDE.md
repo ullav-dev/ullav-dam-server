@@ -64,11 +64,12 @@ migrations/
   003_asset_is_locked.sql       – Adds is_locked (BOOLEAN NOT NULL DEFAULT FALSE)
   004_asset_visibility.sql      – Adds is_private (default true), public_read/download/write (default false)
   005_category_access_level_creator.sql – Adds access_level enum (Private/Group/Global, default Private) and creator (nullable TEXT) to categories
+  006_owner_id.sql                      – Adds owner_id (TEXT NOT NULL DEFAULT '') to assets + index idx_assets_owner
 ```
 
 ## Data Model
 
-- **Asset** – `id`, `name`, `description`, `asset_type`, `size` (bytes, BIGINT), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default true), `available_until` (nullable timestamptz), `is_locked` (bool, default false), `is_private` (bool, default true), `public_read`/`public_download`/`public_write` (bool, default false), timestamps
+- **Asset** – `id`, `owner_id` (TEXT, JWT `sub`), `name`, `description`, `asset_type`, `size` (bytes, BIGINT), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default true), `available_until` (nullable timestamptz), `is_locked` (bool, default false), `is_private` (bool, default true), `public_read`/`public_download`/`public_write` (bool, default false), timestamps
 - **Category** – `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), `access_level` (enum: `Private`/`Group`/`Global`, default `Private`), `creator` (nullable text), timestamps
 - **asset_categories** – M2M junction table (asset_id, category_id)
 
@@ -93,6 +94,7 @@ migrations/
 | GET | `/categories/:id` | Get category + direct sub-categories |
 | PUT | `/categories/:id` | Update category |
 | DELETE | `/categories/:id` | Delete category |
+| GET | `/usage` | Current asset count, bytes used, and plan limits for the authenticated user |
 | GET | `/docs` | Swagger UI |
 | GET | `/api-doc/openapi.json` | OpenAPI 3.0 spec |
 
@@ -114,6 +116,7 @@ migrations/
   - **Apple iWork** (Pages, Numbers, Keynote) — extracted from the ZIP archive's embedded QuickLook thumbnail (`QuickLook/Thumbnail.jpg` or `.png`) using the `zip` crate, then resized with the `image` crate.
   - **Everything else** (SVG, video, audio, pending uploads) — returns a type-appropriate SVG fallback icon immediately, no download attempted.
   - On any render failure the fallback icon is returned instead of an error. Successful PNGs are written to cache with `Cache-Control: public, max-age=86400`.
-- **Column list discipline:** any SQL query that SELECTs category rows and maps them through `Category::from` must include `access_level` and `creator` in the column list — omitting them causes a runtime panic (ECONNRESET at the client). Same applies to assets: `is_private`, `public_read`, `public_download`, `public_write` must be present. Use the `CATEGORY_COLUMNS` / `ASSET_COLUMNS` constants defined in each handler file rather than spelling out columns manually.
+- **Column list discipline:** any SQL query that SELECTs category rows and maps them through `Category::from` must include `access_level` and `creator` in the column list — omitting them causes a runtime panic (ECONNRESET at the client). Same applies to assets: `owner_id`, `is_private`, `public_read`, `public_download`, `public_write` must be present. Use the `CATEGORY_COLUMNS` / `ASSET_COLUMNS` constants defined in each handler file rather than spelling out columns manually.
+- **Quota SUM queries:** always cast `COALESCE(SUM(size), 0)` explicitly — `CAST(COALESCE(SUM(size), 0) AS BIGINT)`. Without the cast, PostgreSQL infers `int4` for the literal `0` when the table is empty, causing a tokio-postgres deserialization panic at the Rust `i64` read site.
 - ZIP import (`POST /zip/upload`): accepts multipart with `file` (ZIP) and optional `creator` (string). Mirrors directory structure as a category tree; each file becomes an asset linked to its directory's category. macOS artifacts skipped. ZIP itself is not stored.
-- Branch policy: all development happens on `claude-work`; do not commit to `main`.
+- Branch policy: feature branches merge to `main` via PR; do not commit directly to `main`.
