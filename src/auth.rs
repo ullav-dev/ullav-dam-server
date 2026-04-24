@@ -65,6 +65,8 @@ pub struct AuthUser {
     pub asset_limit: Option<i64>,
     /// Maximum total bytes the user may store. `None` = unlimited.
     pub storage_limit_bytes: Option<i64>,
+    /// Maximum number of categories the user may create. `None` = unlimited.
+    pub category_limit: Option<i64>,
 }
 
 #[axum::async_trait]
@@ -97,9 +99,9 @@ where
         .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
 
         // Admins bypass all subscription checks and always get full access.
-        let (dam_access, asset_limit, storage_limit_bytes) =
+        let (dam_access, asset_limit, storage_limit_bytes, category_limit) =
             if claims.roles.iter().any(|r| r == "admin") {
-                (DamAccess::Full, None, None)
+                (DamAccess::Full, None, None, None)
             } else {
                 // Resolve the effective tier from comad first, then clann fallback.
                 let comad_tier = claims.subscriptions.get("comad")
@@ -111,18 +113,19 @@ where
                     .map(|s| s.tier.as_str());
 
                 // Limits per tier (comad-native tiers take precedence).
-                let (access, assets, storage) = match comad_tier {
-                    Some("enterprise") => (DamAccess::Full, None, None),
-                    Some("team") => (DamAccess::Full, Some(10_000), Some(50 * 1024 * 1024 * 1024)),
-                    Some("individual") => (DamAccess::ImagesOnly, Some(500), Some(1024 * 1024 * 1024)),
+                // category_limit: individual=50, family=200, professional/team=1000, enterprise=unlimited
+                let (access, assets, storage, categories) = match comad_tier {
+                    Some("enterprise") => (DamAccess::Full, None, None, None),
+                    Some("team") => (DamAccess::Full, Some(10_000), Some(50 * 1024 * 1024 * 1024), Some(1_000)),
+                    Some("individual") => (DamAccess::ImagesOnly, Some(500), Some(1024 * 1024 * 1024), Some(50)),
                     _ => match clann_tier {
-                        Some("enterprise") => (DamAccess::Full, None, None),
-                        Some("professional") => (DamAccess::Full, Some(10_000), Some(50 * 1024 * 1024 * 1024)),
-                        Some("family") => (DamAccess::ImagesOnly, Some(500), Some(1024 * 1024 * 1024)),
-                        _ => (DamAccess::None, Some(0), Some(0)),
+                        Some("enterprise") => (DamAccess::Full, None, None, None),
+                        Some("professional") => (DamAccess::Full, Some(10_000), Some(50 * 1024 * 1024 * 1024), Some(1_000)),
+                        Some("family") => (DamAccess::ImagesOnly, Some(500), Some(1024 * 1024 * 1024), Some(200)),
+                        _ => (DamAccess::None, Some(0), Some(0), Some(0)),
                     },
                 };
-                (access, assets, storage)
+                (access, assets, storage, categories)
             };
 
         Ok(AuthUser {
@@ -130,6 +133,7 @@ where
             dam_access,
             asset_limit,
             storage_limit_bytes,
+            category_limit,
         })
     }
 }
@@ -166,6 +170,19 @@ impl AuthUser {
                 return Err(AppError::Forbidden(format!(
                     "Asset limit of {limit} reached for your plan. \
                      Upgrade to add more assets."
+                )));
+            }
+        }
+        Ok(())
+    }
+
+    /// Returns `Err(Forbidden)` if `current_count` is at or above the category limit.
+    pub fn require_category_quota(&self, current_count: i64) -> AppResult<()> {
+        if let Some(limit) = self.category_limit {
+            if current_count >= limit {
+                return Err(AppError::Forbidden(format!(
+                    "Category limit of {limit} reached for your plan. \
+                     Upgrade to create more categories."
                 )));
             }
         }
