@@ -24,6 +24,7 @@ pub struct Category {
     pub parent_id: Option<Uuid>,
     pub access_level: AccessLevel,
     pub creator: Option<String>,
+    pub owner_id: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -37,6 +38,7 @@ impl From<&Row> for Category {
             parent_id: row.get("parent_id"),
             access_level: row.get("access_level"),
             creator: row.get("creator"),
+            owner_id: row.get("owner_id"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -146,6 +148,7 @@ mod tests {
             parent_id: None,
             access_level: AccessLevel::Private,
             creator: Some("colin".to_string()),
+            owner_id: "some-uuid".to_string(),
             created_at: now,
             updated_at: now,
         }
@@ -176,6 +179,7 @@ mod tests {
             parent_id: Some(parent_id),
             access_level: AccessLevel::Group,
             creator: None,
+            owner_id: "some-uuid".to_string(),
             created_at: now,
             updated_at: now,
         };
@@ -210,6 +214,7 @@ mod tests {
             parent_id: Some(Uuid::new_v4()),
             access_level: AccessLevel::Global,
             creator: Some("colin".to_string()),
+            owner_id: "some-uuid".to_string(),
             created_at: child_now,
             updated_at: child_now,
         };

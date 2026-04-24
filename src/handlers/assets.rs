@@ -1032,7 +1032,7 @@ pub async fn get_usage(
 
     let cat_row = client
         .query_one(
-            "SELECT COUNT(*) AS category_count FROM categories WHERE creator = $1",
+            "SELECT COUNT(*) AS category_count FROM categories WHERE owner_id = $1",
             &[&auth_user.user_id],
         )
         .await?;
