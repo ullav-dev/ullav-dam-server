@@ -106,6 +106,16 @@ pub async fn create_category(
     auth_user.require_access()?;
     let client = state.db.get().await?;
 
+    // Enforce per-user category limit.
+    let count_row = client
+        .query_one(
+            "SELECT COUNT(*) AS cnt FROM categories WHERE creator = $1",
+            &[&auth_user.user_id],
+        )
+        .await?;
+    let current_count: i64 = count_row.try_get("cnt")?;
+    auth_user.require_category_quota(current_count)?;
+
     // Validate parent exists if provided
     if let Some(parent_id) = body.parent_id {
         let exists = client

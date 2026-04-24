@@ -997,6 +997,10 @@ pub struct UsageSummary {
     pub storage_limit_bytes: Option<i64>,
     /// Maximum asset count allowed by the plan. `null` means unlimited.
     pub asset_limit: Option<i64>,
+    /// Number of categories created by this user.
+    pub category_count: i64,
+    /// Maximum categories the user may create. `null` means unlimited.
+    pub category_limit: Option<i64>,
 }
 
 #[utoipa::path(
@@ -1026,10 +1030,19 @@ pub async fn get_usage(
         )
         .await?;
 
+    let cat_row = client
+        .query_one(
+            "SELECT COUNT(*) AS category_count FROM categories WHERE creator = $1",
+            &[&auth_user.user_id],
+        )
+        .await?;
+
     Ok(Json(UsageSummary {
         asset_count: row.try_get("asset_count")?,
         used_bytes: row.try_get("used_bytes")?,
         storage_limit_bytes: auth_user.storage_limit_bytes,
         asset_limit: auth_user.asset_limit,
+        category_count: cat_row.try_get("category_count")?,
+        category_limit: auth_user.category_limit,
     }))
 }
