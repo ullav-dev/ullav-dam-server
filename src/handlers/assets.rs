@@ -242,7 +242,7 @@ pub async fn get_asset(
 
     let cat_rows = client
         .query(
-            "SELECT c.id, c.name, c.description, c.parent_id, c.creator, c.access_level, c.created_at, c.updated_at
+            "SELECT c.id, c.name, c.description, c.parent_id, c.creator, c.access_level, c.owner_id, c.created_at, c.updated_at
              FROM categories c
              JOIN asset_categories ac ON ac.category_id = c.id
              WHERE ac.asset_id = $1",
