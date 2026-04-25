@@ -14,7 +14,7 @@ use crate::{
 };
 
 const CATEGORY_COLUMNS: &str =
-    "id, name, description, parent_id, access_level, creator, created_at, updated_at";
+    "id, name, description, parent_id, access_level, creator, owner_id, created_at, updated_at";
 
 const ASSET_COLUMNS: &str =
     "id, name, description, asset_type, size, storage_key, bucket, \
@@ -155,10 +155,10 @@ pub async fn upload_zip(
     let root_row = client
         .query_one(
             &format!(
-                "INSERT INTO categories (id, name) VALUES ($1, $2) \
+                "INSERT INTO categories (id, name, owner_id) VALUES ($1, $2, $3) \
                  RETURNING {CATEGORY_COLUMNS}"
             ),
-            &[&root_id, &root_cat_name],
+            &[&root_id, &root_cat_name, &auth_user.user_id],
         )
         .await?;
 
@@ -185,10 +185,10 @@ pub async fn upload_zip(
         let row = client
             .query_one(
                 &format!(
-                    "INSERT INTO categories (id, name, parent_id) VALUES ($1, $2, $3) \
+                    "INSERT INTO categories (id, name, parent_id, owner_id) VALUES ($1, $2, $3, $4) \
                      RETURNING {CATEGORY_COLUMNS}"
                 ),
-                &[&cat_id, &cat_name, &parent_id],
+                &[&cat_id, &cat_name, &parent_id, &auth_user.user_id],
             )
             .await?;
 

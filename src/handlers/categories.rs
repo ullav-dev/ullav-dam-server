@@ -13,7 +13,7 @@ use crate::{
 };
 
 const CATEGORY_COLUMNS: &str =
-    "id, name, description, parent_id, access_level, creator, created_at, updated_at";
+    "id, name, description, parent_id, access_level, creator, owner_id, created_at, updated_at";
 
 // ── List all categories ───────────────────────────────────────────────────────
 
@@ -109,7 +109,7 @@ pub async fn create_category(
     // Enforce per-user category limit.
     let count_row = client
         .query_one(
-            "SELECT COUNT(*) AS cnt FROM categories WHERE creator = $1",
+            "SELECT COUNT(*) AS cnt FROM categories WHERE owner_id = $1",
             &[&auth_user.user_id],
         )
         .await?;
@@ -134,11 +134,11 @@ pub async fn create_category(
     let row = client
         .query_one(
             &format!(
-                "INSERT INTO categories (name, description, parent_id, access_level, creator)
-                 VALUES ($1, $2, $3, $4, $5)
+                "INSERT INTO categories (name, description, parent_id, access_level, creator, owner_id)
+                 VALUES ($1, $2, $3, $4, $5, $6)
                  RETURNING {CATEGORY_COLUMNS}"
             ),
-            &[&body.name, &body.description, &body.parent_id, &access_level, &body.creator],
+            &[&body.name, &body.description, &body.parent_id, &access_level, &body.creator, &auth_user.user_id],
         )
         .await?;
 
@@ -179,6 +179,10 @@ pub async fn update_category(
         .ok_or_else(|| AppError::NotFound(format!("Category {id} not found")))?;
 
     let current = Category::from(&row);
+
+    if current.owner_id != auth_user.user_id && !auth_user.is_admin {
+        return Err(AppError::Forbidden("You do not own this category".into()));
+    }
 
     let name = body.name.unwrap_or(current.name);
     let description = body.description.or(current.description);
@@ -235,13 +239,22 @@ pub async fn delete_category(
     auth_user.require_access()?;
     let client = state.db.get().await?;
 
-    let result = client
+    let row = client
+        .query_opt(
+            "SELECT owner_id FROM categories WHERE id = $1",
+            &[&id],
+        )
+        .await?
+        .ok_or_else(|| AppError::NotFound(format!("Category {id} not found")))?;
+
+    let owner_id: String = row.get("owner_id");
+    if owner_id != auth_user.user_id && !auth_user.is_admin {
+        return Err(AppError::Forbidden("You do not own this category".into()));
+    }
+
+    client
         .execute("DELETE FROM categories WHERE id = $1", &[&id])
         .await?;
-
-    if result == 0 {
-        return Err(AppError::NotFound(format!("Category {id} not found")));
-    }
 
     Ok(StatusCode::NO_CONTENT)
 }

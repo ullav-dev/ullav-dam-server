@@ -60,6 +60,7 @@ pub enum DamAccess {
 #[derive(Debug, Clone)]
 pub struct AuthUser {
     pub user_id: String,
+    pub is_admin: bool,
     pub dam_access: DamAccess,
     /// Maximum number of assets the user may own. `None` = unlimited.
     pub asset_limit: Option<i64>,
@@ -130,6 +131,7 @@ where
 
         Ok(AuthUser {
             user_id: claims.sub,
+            is_admin: claims.roles.iter().any(|r| r == "admin"),
             dam_access,
             asset_limit,
             storage_limit_bytes,
