@@ -70,6 +70,54 @@ pub struct AuthUser {
     pub category_limit: Option<i64>,
 }
 
+fn resolve_dam_access(
+    roles: &[String],
+    subscriptions: &HashMap<String, SubscriptionClaim>,
+) -> (DamAccess, Option<i64>, Option<i64>, Option<i64>) {
+    if roles.iter().any(|r| r == "admin") {
+        return (DamAccess::Full, None, None, None);
+    }
+    let comad_tier = subscriptions
+        .get("comad")
+        .filter(|s| s.status == "active" || s.status == "trialing")
+        .map(|s| s.tier.as_str());
+    let clann_tier = subscriptions
+        .get("clann")
+        .filter(|s| s.status == "active" || s.status == "trialing")
+        .map(|s| s.tier.as_str());
+    match comad_tier {
+        Some("enterprise") => (DamAccess::Full, None, None, None),
+        Some("team") => (
+            DamAccess::Full,
+            Some(10_000),
+            Some(50 * 1024 * 1024 * 1024),
+            Some(1_000),
+        ),
+        Some("individual") => (
+            DamAccess::ImagesOnly,
+            Some(500),
+            Some(1024 * 1024 * 1024),
+            Some(50),
+        ),
+        _ => match clann_tier {
+            Some("enterprise") => (DamAccess::Full, None, None, None),
+            Some("professional") => (
+                DamAccess::Full,
+                Some(10_000),
+                Some(50 * 1024 * 1024 * 1024),
+                Some(1_000),
+            ),
+            Some("family") => (
+                DamAccess::ImagesOnly,
+                Some(500),
+                Some(1024 * 1024 * 1024),
+                Some(200),
+            ),
+            _ => (DamAccess::None, Some(0), Some(0), Some(0)),
+        },
+    }
+}
+
 #[axum::async_trait]
 impl<S> FromRequestParts<S> for AuthUser
 where
@@ -99,35 +147,8 @@ where
         .map(|d| d.claims)
         .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
 
-        // Admins bypass all subscription checks and always get full access.
         let (dam_access, asset_limit, storage_limit_bytes, category_limit) =
-            if claims.roles.iter().any(|r| r == "admin") {
-                (DamAccess::Full, None, None, None)
-            } else {
-                // Resolve the effective tier from comad first, then clann fallback.
-                let comad_tier = claims.subscriptions.get("comad")
-                    .filter(|s| s.status == "active" || s.status == "trialing")
-                    .map(|s| s.tier.as_str());
-
-                let clann_tier = claims.subscriptions.get("clann")
-                    .filter(|s| s.status == "active" || s.status == "trialing")
-                    .map(|s| s.tier.as_str());
-
-                // Limits per tier (comad-native tiers take precedence).
-                // category_limit: individual=50, family=200, professional/team=1000, enterprise=unlimited
-                let (access, assets, storage, categories) = match comad_tier {
-                    Some("enterprise") => (DamAccess::Full, None, None, None),
-                    Some("team") => (DamAccess::Full, Some(10_000), Some(50 * 1024 * 1024 * 1024), Some(1_000)),
-                    Some("individual") => (DamAccess::ImagesOnly, Some(500), Some(1024 * 1024 * 1024), Some(50)),
-                    _ => match clann_tier {
-                        Some("enterprise") => (DamAccess::Full, None, None, None),
-                        Some("professional") => (DamAccess::Full, Some(10_000), Some(50 * 1024 * 1024 * 1024), Some(1_000)),
-                        Some("family") => (DamAccess::ImagesOnly, Some(500), Some(1024 * 1024 * 1024), Some(200)),
-                        _ => (DamAccess::None, Some(0), Some(0), Some(0)),
-                    },
-                };
-                (access, assets, storage, categories)
-            };
+            resolve_dam_access(&claims.roles, &claims.subscriptions);
 
         Ok(AuthUser {
             user_id: claims.sub,
@@ -203,5 +224,200 @@ impl AuthUser {
             }
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sub(tier: &str, status: &str) -> SubscriptionClaim {
+        SubscriptionClaim {
+            tier: tier.to_string(),
+            status: status.to_string(),
+        }
+    }
+
+    fn subs(pairs: &[(&str, &str, &str)]) -> HashMap<String, SubscriptionClaim> {
+        pairs
+            .iter()
+            .map(|(app, tier, status)| (app.to_string(), sub(tier, status)))
+            .collect()
+    }
+
+    fn auth_user(dam_access: DamAccess, asset_limit: Option<i64>, storage_limit_bytes: Option<i64>, category_limit: Option<i64>) -> AuthUser {
+        AuthUser {
+            user_id: "u1".to_string(),
+            is_admin: false,
+            dam_access,
+            asset_limit,
+            storage_limit_bytes,
+            category_limit,
+        }
+    }
+
+    // ── resolve_dam_access ────────────────────────────────────────────────────
+
+    #[test]
+    fn admin_role_gives_full_unlimited_access() {
+        let roles = vec!["admin".to_string()];
+        let (access, assets, storage, cats) = resolve_dam_access(&roles, &HashMap::new());
+        assert_eq!(access, DamAccess::Full);
+        assert!(assets.is_none());
+        assert!(storage.is_none());
+        assert!(cats.is_none());
+    }
+
+    #[test]
+    fn no_subscription_gives_no_access_with_zero_limits() {
+        let (access, assets, storage, cats) = resolve_dam_access(&[], &HashMap::new());
+        assert_eq!(access, DamAccess::None);
+        assert_eq!(assets, Some(0));
+        assert_eq!(storage, Some(0));
+        assert_eq!(cats, Some(0));
+    }
+
+    #[test]
+    fn comad_individual_active_gives_images_only() {
+        let (access, assets, storage, cats) =
+            resolve_dam_access(&[], &subs(&[("comad", "individual", "active")]));
+        assert_eq!(access, DamAccess::ImagesOnly);
+        assert_eq!(assets, Some(500));
+        assert_eq!(storage, Some(1024 * 1024 * 1024));
+        assert_eq!(cats, Some(50));
+    }
+
+    #[test]
+    fn comad_individual_trialing_also_gives_access() {
+        let (access, ..) = resolve_dam_access(&[], &subs(&[("comad", "individual", "trialing")]));
+        assert_eq!(access, DamAccess::ImagesOnly);
+    }
+
+    #[test]
+    fn comad_individual_canceled_gives_no_access() {
+        let (access, ..) = resolve_dam_access(&[], &subs(&[("comad", "individual", "canceled")]));
+        assert_eq!(access, DamAccess::None);
+    }
+
+    #[test]
+    fn comad_team_gives_full_with_limits() {
+        let (access, assets, storage, cats) =
+            resolve_dam_access(&[], &subs(&[("comad", "team", "active")]));
+        assert_eq!(access, DamAccess::Full);
+        assert_eq!(assets, Some(10_000));
+        assert_eq!(storage, Some(50 * 1024 * 1024 * 1024));
+        assert_eq!(cats, Some(1_000));
+    }
+
+    #[test]
+    fn comad_enterprise_gives_full_unlimited() {
+        let (access, assets, storage, cats) =
+            resolve_dam_access(&[], &subs(&[("comad", "enterprise", "active")]));
+        assert_eq!(access, DamAccess::Full);
+        assert!(assets.is_none());
+        assert!(storage.is_none());
+        assert!(cats.is_none());
+    }
+
+    #[test]
+    fn comad_takes_precedence_over_clann() {
+        // comad individual + clann professional → comad wins → ImagesOnly
+        let (access, ..) = resolve_dam_access(
+            &[],
+            &subs(&[
+                ("comad", "individual", "active"),
+                ("clann", "professional", "active"),
+            ]),
+        );
+        assert_eq!(access, DamAccess::ImagesOnly);
+    }
+
+    #[test]
+    fn clann_family_fallback_gives_images_only() {
+        let (access, assets, storage, cats) =
+            resolve_dam_access(&[], &subs(&[("clann", "family", "active")]));
+        assert_eq!(access, DamAccess::ImagesOnly);
+        assert_eq!(assets, Some(500));
+        assert_eq!(storage, Some(1024 * 1024 * 1024));
+        assert_eq!(cats, Some(200));
+    }
+
+    #[test]
+    fn clann_professional_fallback_gives_full_with_limits() {
+        let (access, assets, storage, cats) =
+            resolve_dam_access(&[], &subs(&[("clann", "professional", "active")]));
+        assert_eq!(access, DamAccess::Full);
+        assert_eq!(assets, Some(10_000));
+        assert_eq!(storage, Some(50 * 1024 * 1024 * 1024));
+        assert_eq!(cats, Some(1_000));
+    }
+
+    #[test]
+    fn clann_enterprise_fallback_gives_full_unlimited() {
+        let (access, assets, storage, cats) =
+            resolve_dam_access(&[], &subs(&[("clann", "enterprise", "active")]));
+        assert_eq!(access, DamAccess::Full);
+        assert!(assets.is_none());
+        assert!(storage.is_none());
+        assert!(cats.is_none());
+    }
+
+    // ── AuthUser guard methods ────────────────────────────────────────────────
+
+    #[test]
+    fn require_access_blocks_none_tier() {
+        let user = auth_user(DamAccess::None, Some(0), Some(0), Some(0));
+        assert!(user.require_access().is_err());
+    }
+
+    #[test]
+    fn require_access_allows_images_only_and_full() {
+        assert!(auth_user(DamAccess::ImagesOnly, None, None, None).require_access().is_ok());
+        assert!(auth_user(DamAccess::Full, None, None, None).require_access().is_ok());
+    }
+
+    #[test]
+    fn require_mime_allowed_blocks_non_image_for_images_only() {
+        let user = auth_user(DamAccess::ImagesOnly, None, None, None);
+        assert!(user.require_mime_allowed("application/pdf").is_err());
+        assert!(user.require_mime_allowed("video/mp4").is_err());
+        assert!(user.require_mime_allowed("image/jpeg").is_ok());
+        assert!(user.require_mime_allowed("image/png").is_ok());
+    }
+
+    #[test]
+    fn require_mime_allowed_full_tier_allows_any_mime() {
+        let user = auth_user(DamAccess::Full, None, None, None);
+        assert!(user.require_mime_allowed("application/pdf").is_ok());
+        assert!(user.require_mime_allowed("video/mp4").is_ok());
+    }
+
+    #[test]
+    fn require_asset_quota_blocks_at_limit() {
+        let user = auth_user(DamAccess::Full, Some(500), None, None);
+        assert!(user.require_asset_quota(499).is_ok());
+        assert!(user.require_asset_quota(500).is_err());
+        assert!(user.require_asset_quota(501).is_err());
+    }
+
+    #[test]
+    fn require_asset_quota_unlimited_always_passes() {
+        let user = auth_user(DamAccess::Full, None, None, None);
+        assert!(user.require_asset_quota(i64::MAX).is_ok());
+    }
+
+    #[test]
+    fn require_storage_quota_blocks_when_exceeded() {
+        let one_gb = 1024 * 1024 * 1024_i64;
+        let user = auth_user(DamAccess::ImagesOnly, None, Some(one_gb), None);
+        assert!(user.require_storage_quota(one_gb - 1, 1).is_ok());
+        assert!(user.require_storage_quota(one_gb, 1).is_err());
+    }
+
+    #[test]
+    fn require_category_quota_blocks_at_limit() {
+        let user = auth_user(DamAccess::Full, None, None, Some(50));
+        assert!(user.require_category_quota(49).is_ok());
+        assert!(user.require_category_quota(50).is_err());
     }
 }
