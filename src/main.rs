@@ -35,6 +35,8 @@ pub struct AppState {
     pub thumbnail_cache: ThumbnailCache,
     pub thumbnail_size: u32,
     pub jwt_secret: String,
+    pub auth_service_url: String,
+    pub auth_client: reqwest::Client,
 }
 
 #[derive(OpenApi)]
@@ -111,11 +113,15 @@ async fn main() -> Result<()> {
         thumbnail_cache: Arc::new(RwLock::new(HashMap::new())),
         thumbnail_size: cfg.thumbnail_size,
         jwt_secret: cfg.jwt_secret,
+        auth_service_url: cfg.auth_service_url,
+        auth_client: reqwest::Client::new(),
     };
 
     let app = Router::new()
         // Docs
         .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", ApiDoc::openapi()))
+        // Auth proxy (forwards to ullav-user-management)
+        .route("/auth/login", post(handlers::auth::login))
         // Assets
         .route("/usage", get(handlers::assets::get_usage))
         .route("/assets", get(handlers::assets::list_assets).post(handlers::assets::create_asset))

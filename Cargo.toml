@@ -58,6 +58,9 @@ mime_guess = "2"
 # JWT validation
 jsonwebtoken = "9"
 
+# HTTP client (auth proxy)
+reqwest = { version = "0.12", features = ["json"] }
+
 # Image processing for thumbnails
 image = "0.25"
 
