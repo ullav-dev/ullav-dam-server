@@ -12,6 +12,7 @@ pub struct Config {
     pub s3_region: String,
     pub thumbnail_size: u32,
     pub jwt_secret: String,
+    pub auth_service_url: String,
 }
 
 impl Config {
@@ -40,6 +41,8 @@ impl Config {
                 .context("THUMBNAIL_SIZE must be a positive integer")?,
             jwt_secret: std::env::var("JWT_SECRET")
                 .context("JWT_SECRET is required")?,
+            auth_service_url: std::env::var("AUTH_SERVICE_URL")
+                .unwrap_or_else(|_| "http://localhost:8081".into()),
         })
     }
 
