@@ -56,6 +56,7 @@ pub struct AppState {
         handlers::assets::delete_asset,
         handlers::assets::create_and_upload_asset,
         handlers::assets::get_thumbnail,
+        handlers::assets::delete_thumbnail,
         handlers::assets::add_category_to_asset,
         handlers::assets::remove_category_from_asset,
         handlers::assets::get_usage,
@@ -136,7 +137,7 @@ async fn main() -> Result<()> {
         .route("/assets/:id/upload", post(handlers::assets::upload_asset)
             .layer(DefaultBodyLimit::max(200 * 1024 * 1024)))
         .route("/assets/:id/download", get(handlers::assets::download_asset))
-        .route("/assets/:id/thumbnail", get(handlers::assets::get_thumbnail))
+        .route("/assets/:id/thumbnail", get(handlers::assets::get_thumbnail).delete(handlers::assets::delete_thumbnail))
         .route(
             "/assets/:asset_id/categories/:category_id",
             post(handlers::assets::add_category_to_asset)

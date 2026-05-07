@@ -976,6 +976,34 @@ pub async fn get_thumbnail(
     Ok(build_thumbnail_response(png, "image/png"))
 }
 
+#[utoipa::path(
+    delete,
+    path = "/assets/{id}/thumbnail",
+    tag = "assets",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Asset ID"),
+    ),
+    responses(
+        (status = 204, description = "Cache entry evicted; next GET will regenerate the thumbnail"),
+        (status = 404, description = "Asset not found", body = ErrorResponse),
+    )
+)]
+pub async fn delete_thumbnail(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    let client = state.db.get().await?;
+    let exists = client
+        .query_opt("SELECT 1 FROM assets WHERE id = $1 AND owner_id = $2", &[&id, &auth_user.user_id])
+        .await?;
+    if exists.is_none() {
+        return Err(AppError::NotFound(format!("Asset {id} not found")));
+    }
+    state.thumbnail_cache.write().await.remove(&id);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn build_thumbnail_response(data: bytes::Bytes, content_type: &'static str) -> Response {
     Response::builder()
         .status(StatusCode::OK)
