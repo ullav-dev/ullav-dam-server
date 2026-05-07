@@ -30,8 +30,12 @@ pub async fn list_categories(auth_user: AuthUser, State(state): State<AppState>)
     let client = state.db.get().await?;
     let rows = client
         .query(
-            &format!("SELECT {CATEGORY_COLUMNS} FROM categories ORDER BY name ASC"),
-            &[],
+            &format!(
+                "SELECT {CATEGORY_COLUMNS} FROM categories \
+                 WHERE access_level != 'Private' OR owner_id = $1 \
+                 ORDER BY name ASC"
+            ),
+            &[&auth_user.user_id],
         )
         .await?;
 
@@ -70,6 +74,10 @@ pub async fn get_category(
         .ok_or_else(|| AppError::NotFound(format!("Category {id} not found")))?;
 
     let category = Category::from(&row);
+
+    if category.access_level == AccessLevel::Private && category.owner_id != auth_user.user_id {
+        return Err(AppError::NotFound(format!("Category {id} not found")));
+    }
 
     let child_rows = client
         .query(
