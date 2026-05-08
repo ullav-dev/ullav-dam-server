@@ -34,6 +34,9 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
+# Bounded LRU cache for thumbnails
+lru = "0.12"
+
 # Config & env
 dotenvy = "0.15"
 

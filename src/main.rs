@@ -5,9 +5,10 @@ use axum::{
     routing::{get, post},
 };
 use bytes::Bytes;
-use std::collections::HashMap;
+use lru::LruCache;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use utoipa::OpenApi;
@@ -26,7 +27,7 @@ use config::Config;
 use db::DbPool;
 use storage::StorageClient;
 
-pub type ThumbnailCache = Arc<RwLock<HashMap<Uuid, Bytes>>>;
+pub type ThumbnailCache = Arc<Mutex<LruCache<Uuid, Bytes>>>;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -111,7 +112,9 @@ async fn main() -> Result<()> {
     let state = AppState {
         db: pool,
         storage,
-        thumbnail_cache: Arc::new(RwLock::new(HashMap::new())),
+        thumbnail_cache: Arc::new(Mutex::new(LruCache::new(
+            NonZeroUsize::new(cfg.thumbnail_cache_capacity).unwrap_or(NonZeroUsize::new(512).unwrap()),
+        ))),
         thumbnail_size: cfg.thumbnail_size,
         jwt_secret: cfg.jwt_secret,
         auth_service_url: cfg.auth_service_url,

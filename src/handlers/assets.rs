@@ -395,8 +395,9 @@ pub async fn upload_asset(
         .upload(&storage_key, data, &content_type)
         .await?;
 
-    // Evict stale thumbnail so the next request regenerates from the new file
-    state.thumbnail_cache.write().await.remove(&id);
+    // Evict stale thumbnail from both memory and S3 so the next request regenerates from the new file
+    state.thumbnail_cache.lock().await.pop(&id);
+    let _ = state.storage.delete(&format!("thumbnails/{id}.png")).await;
 
     let row = client
         .query_one(
@@ -560,10 +561,14 @@ pub async fn delete_asset(
 
     let storage_key: String = row.get("storage_key");
 
-    // Delete from storage (best-effort; file may not have been uploaded yet)
+    // Delete original from storage (best-effort; file may not have been uploaded yet)
     if !storage_key.starts_with("pending/") {
         let _ = state.storage.delete(&storage_key).await;
     }
+
+    // Delete S3 thumbnail and evict from memory cache (best-effort)
+    let _ = state.storage.delete(&format!("thumbnails/{id}.png")).await;
+    state.thumbnail_cache.lock().await.pop(&id);
 
     client
         .execute("DELETE FROM assets WHERE id = $1", &[&id])
@@ -898,15 +903,22 @@ pub async fn get_thumbnail(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
-    // 1. Check in-memory cache before hitting the database
+    // 1. In-memory LRU cache (hot path — no I/O)
     {
-        let cache = state.thumbnail_cache.read().await;
+        let mut cache = state.thumbnail_cache.lock().await;
         if let Some(cached) = cache.get(&id) {
             return Ok(build_thumbnail_response(cached.clone(), "image/png"));
         }
     }
 
-    // 2. Fetch asset metadata
+    // 2. S3-persisted thumbnail — survives restarts, avoids re-rendering
+    let thumb_key = format!("thumbnails/{id}.png");
+    if let Some(png) = state.storage.try_download(&thumb_key).await? {
+        state.thumbnail_cache.lock().await.put(id, png.clone());
+        return Ok(build_thumbnail_response(png, "image/png"));
+    }
+
+    // 3. Fetch asset metadata
     let client = state.db.get().await?;
     let row = client
         .query_opt(
@@ -919,9 +931,7 @@ pub async fn get_thumbnail(
     let storage_key: String = row.get("storage_key");
     let asset_type: String = row.get("asset_type");
 
-    // 3. Only raster images, PDFs, Office documents, and iWork files get
-    //    rendered; everything else (SVG, video, audio…) and pending (not yet
-    //    uploaded) assets return the SVG fallback icon immediately.
+    // 4. Non-renderable types and pending assets get an SVG fallback immediately
     let is_raster = asset_type.starts_with("image/") && asset_type != "image/svg+xml";
     let is_pdf = asset_type == "application/pdf";
     let office_ext = office_mime_to_ext(&asset_type);
@@ -934,11 +944,11 @@ pub async fn get_thumbnail(
         return Ok(build_thumbnail_response(bytes::Bytes::from(svg), "image/svg+xml"));
     }
 
-    // 4. Download the raw file from storage
+    // 5. Download the raw file from storage
     let raw = state.storage.download(&storage_key).await?;
     let size = state.thumbnail_size;
 
-    // 5. Render on a blocking thread (CPU-bound — must not block the async runtime)
+    // 6. Render on a blocking thread (CPU-bound — must not block the async runtime)
     let result = tokio::task::spawn_blocking(move || -> Result<bytes::Bytes, String> {
         if is_pdf {
             render_pdf_thumbnail(&raw, size)
@@ -960,7 +970,7 @@ pub async fn get_thumbnail(
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("thumbnail thread panicked: {e}")))?;
 
-    // 6. On failure fall back to the icon rather than returning an error to the client
+    // 7. Render failure → SVG fallback (non-fatal)
     let png = match result {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -970,8 +980,13 @@ pub async fn get_thumbnail(
         }
     };
 
-    // 7. Write into cache
-    state.thumbnail_cache.write().await.insert(id, png.clone());
+    // 8. Persist to S3 so future restarts don't re-render (non-fatal if it fails)
+    if let Err(e) = state.storage.upload(&thumb_key, png.clone(), "image/png").await {
+        tracing::warn!("Failed to persist thumbnail to S3 for asset {id}: {e}");
+    }
+
+    // 9. Warm the in-memory cache
+    state.thumbnail_cache.lock().await.put(id, png.clone());
 
     Ok(build_thumbnail_response(png, "image/png"))
 }
@@ -1000,7 +1015,9 @@ pub async fn delete_thumbnail(
     if exists.is_none() {
         return Err(AppError::NotFound(format!("Asset {id} not found")));
     }
-    state.thumbnail_cache.write().await.remove(&id);
+    state.thumbnail_cache.lock().await.pop(&id);
+    // S3 delete is idempotent — no error if no thumbnail was ever stored
+    let _ = state.storage.delete(&format!("thumbnails/{id}.png")).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
