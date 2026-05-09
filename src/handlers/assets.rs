@@ -957,10 +957,22 @@ pub async fn get_thumbnail(
         } else if is_iwork {
             extract_iwork_thumbnail(&raw, size)
         } else {
+            // Read EXIF orientation before consuming `raw` (cheap — Bytes is ref-counted).
+            // JpegDecoder::orientation() gracefully returns an error for non-JPEG formats,
+            // so we fall back to NoTransforms (identity) for PNG, WebP, etc.
+            let orientation = {
+                use image::codecs::jpeg::JpegDecoder;
+                use image::ImageDecoder;
+                JpegDecoder::new(Cursor::new(&raw[..]))
+                    .ok()
+                    .and_then(|mut d| d.orientation().ok())
+                    .unwrap_or(image::metadata::Orientation::NoTransforms)
+            };
             let reader = image::ImageReader::new(Cursor::new(raw))
                 .with_guessed_format()
                 .map_err(|e| e.to_string())?;
-            let img = reader.decode().map_err(|e| e.to_string())?;
+            let mut img = reader.decode().map_err(|e| e.to_string())?;
+            img.apply_orientation(orientation);
             let thumb = img.resize(size, size, FilterType::Lanczos3);
             let mut buf = Cursor::new(Vec::new());
             thumb.write_to(&mut buf, ImageFormat::Png).map_err(|e| e.to_string())?;
