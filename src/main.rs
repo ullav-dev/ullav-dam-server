@@ -1,7 +1,8 @@
 use anyhow::Result;
 use axum::{
     Router,
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, State},
+    http::StatusCode,
     routing::{get, post},
 };
 use bytes::Bytes;
@@ -48,6 +49,7 @@ pub struct AppState {
         description = "Digital Asset Management HTTP API"
     ),
     paths(
+        health,
         handlers::assets::list_assets,
         handlers::assets::get_asset,
         handlers::assets::create_asset,
@@ -87,6 +89,26 @@ pub struct AppState {
 )]
 struct ApiDoc;
 
+/// Check service health (liveness + DB connectivity)
+#[utoipa::path(
+    get,
+    path = "/health",
+    responses(
+        (status = 200, description = "Service is healthy"),
+        (status = 503, description = "Database unavailable"),
+    ),
+    tag = "health"
+)]
+async fn health(State(state): State<AppState>) -> StatusCode {
+    match state.db.get().await {
+        Ok(client) => match client.query_one("SELECT 1", &[]).await {
+            Ok(_) => StatusCode::OK,
+            Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+        },
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Logging
@@ -124,6 +146,8 @@ async fn main() -> Result<()> {
     let app = Router::new()
         // Docs
         .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", ApiDoc::openapi()))
+        // Health
+        .route("/health", get(health))
         // Auth proxy (forwards to ullav-user-management)
         .route("/auth/login", post(handlers::auth::login))
         // Assets
