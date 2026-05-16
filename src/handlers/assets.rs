@@ -383,7 +383,7 @@ pub async fn upload_asset(
     // Enforce storage quota: total used - old size + new size must not exceed limit
     let usage_row = client
         .query_one(
-            "SELECT COALESCE(SUM(size), 0) AS used FROM assets WHERE owner_id = $1",
+            "SELECT CAST(COALESCE(SUM(size), 0) AS BIGINT) AS used FROM assets WHERE owner_id = $1",
             &[&auth_user.user_id],
         )
         .await?;
@@ -772,7 +772,7 @@ pub async fn create_and_upload_asset(
     // Enforce storage quota
     let usage_row = client
         .query_one(
-            "SELECT COALESCE(SUM(size), 0) AS used FROM assets WHERE owner_id = $1",
+            "SELECT CAST(COALESCE(SUM(size), 0) AS BIGINT) AS used FROM assets WHERE owner_id = $1",
             &[&auth_user.user_id],
         )
         .await?;
