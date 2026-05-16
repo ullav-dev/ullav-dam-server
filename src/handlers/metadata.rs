@@ -86,7 +86,7 @@ pub async fn refresh_asset_metadata(
 
     let raw = state.storage.download(&storage_key).await?;
 
-    let extracted = tokio::task::spawn_blocking(move || metadata::extract_from_bytes(&raw))
+    let extracted = tokio::task::spawn_blocking(move || metadata::extract_from_bytes(raw))
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("metadata extraction panicked: {e}")))?;
 

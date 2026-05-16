@@ -408,7 +408,7 @@ pub async fn upload_asset(
         .await?;
 
     // Extract and store metadata (best-effort; never fails the upload)
-    let extracted = tokio::task::spawn_blocking(move || metadata::extract_from_bytes(&data_for_meta))
+    let extracted = tokio::task::spawn_blocking(move || metadata::extract_from_bytes(data_for_meta))
         .await
         .unwrap_or_default();
     if let Err(e) = metadata::store_metadata(&*client, id, &extracted).await {
@@ -803,7 +803,7 @@ pub async fn create_and_upload_asset(
         .await?;
 
     // Extract and store metadata (best-effort; never fails the upload)
-    let extracted = tokio::task::spawn_blocking(move || metadata::extract_from_bytes(&data_for_meta))
+    let extracted = tokio::task::spawn_blocking(move || metadata::extract_from_bytes(data_for_meta))
         .await
         .unwrap_or_default();
     if let Err(e) = metadata::store_metadata(&*client, asset_id, &extracted).await {
