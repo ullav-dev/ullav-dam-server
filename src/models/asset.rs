@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value as JsonValue;
 use tokio_postgres::Row;
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -27,6 +28,10 @@ pub struct Asset {
     pub public_read: bool,
     pub public_download: bool,
     pub public_write: bool,
+    /// Team this asset belongs to (optional).
+    pub team_id: Option<String>,
+    /// User-defined custom field values keyed by field schema `key` slugs.
+    pub custom_fields: Option<JsonValue>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -53,6 +58,8 @@ impl From<&Row> for Asset {
             public_read: row.get("public_read"),
             public_download: row.get("public_download"),
             public_write: row.get("public_write"),
+            team_id: row.get("team_id"),
+            custom_fields: row.get("custom_fields"),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -89,6 +96,11 @@ pub struct CreateAssetRequest {
     pub public_download: Option<bool>,
     /// Allow unauthenticated write access. Requires `is_private = false`.
     pub public_write: Option<bool>,
+    /// Team to assign this asset to. Must be a team the requesting user belongs to.
+    pub team_id: Option<String>,
+    /// Initial custom field values keyed by field schema `key` slugs.
+    /// Validated against the team's custom field schemas when `team_id` is set.
+    pub custom_fields: Option<JsonValue>,
 }
 
 /// Request body for updating asset metadata.
@@ -108,6 +120,10 @@ pub struct UpdateAssetRequest {
     pub public_read: Option<bool>,
     pub public_download: Option<bool>,
     pub public_write: Option<bool>,
+    /// Assign or change the team this asset belongs to.
+    pub team_id: Option<String>,
+    /// Replace all custom field values. Validated against the team's schemas.
+    pub custom_fields: Option<JsonValue>,
 }
 
 #[cfg(test)]
@@ -206,6 +222,8 @@ mod tests {
             public_read: false,
             public_download: false,
             public_write: false,
+            team_id: None,
+            custom_fields: None,
             created_at: now,
             updated_at: now,
         }
@@ -249,6 +267,8 @@ mod tests {
             public_read: false,
             public_download: false,
             public_write: false,
+            team_id: None,
+            custom_fields: None,
             created_at: now,
             updated_at: now,
         };

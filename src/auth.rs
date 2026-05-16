@@ -20,12 +20,20 @@ struct SubscriptionClaim {
 }
 
 #[derive(Debug, Deserialize)]
+struct TeamClaim {
+    pub role: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct Claims {
     pub sub: String,
     #[serde(default)]
     pub roles: Vec<String>,
     #[serde(default)]
     pub subscriptions: HashMap<String, SubscriptionClaim>,
+    /// Active team memberships keyed by team UUID string.
+    #[serde(default)]
+    pub teams: HashMap<String, TeamClaim>,
 }
 
 // ── DAM access level ──────────────────────────────────────────────────────────
@@ -65,6 +73,8 @@ pub struct AuthUser {
     pub asset_limit: Option<i64>,
     /// Maximum total bytes the user may store. `None` = unlimited.
     pub storage_limit_bytes: Option<i64>,
+    /// Active team memberships: team UUID → role (`"owner"` | `"leader"` | `"member"`).
+    pub teams: HashMap<String, String>,
 }
 
 #[axum::async_trait]
@@ -125,11 +135,18 @@ where
                 (access, assets, storage)
             };
 
+        let teams = claims
+            .teams
+            .into_iter()
+            .map(|(id, claim)| (id, claim.role))
+            .collect();
+
         Ok(AuthUser {
             user_id: claims.sub,
             dam_access,
             asset_limit,
             storage_limit_bytes,
+            teams,
         })
     }
 }
@@ -184,5 +201,28 @@ impl AuthUser {
             }
         }
         Ok(())
+    }
+
+    /// Returns `Err(Forbidden)` if the user is not a member of the given team.
+    pub fn require_team_member(&self, team_id: &str) -> AppResult<()> {
+        if !self.teams.contains_key(team_id) {
+            return Err(AppError::Forbidden(format!(
+                "Not a member of team {team_id}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Returns `Err(Forbidden)` if the user is not an owner or leader of the given team.
+    pub fn require_team_admin(&self, team_id: &str) -> AppResult<()> {
+        match self.teams.get(team_id).map(|r| r.as_str()) {
+            Some("owner" | "leader") => Ok(()),
+            Some(_) => Err(AppError::Forbidden(
+                "Team owner or leader role required".into(),
+            )),
+            None => Err(AppError::Forbidden(format!(
+                "Not a member of team {team_id}"
+            ))),
+        }
     }
 }
