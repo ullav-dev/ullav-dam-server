@@ -173,11 +173,12 @@ use crate::{
     AppState,
     auth::AuthUser,
     error::{AppError, AppResult},
+    metadata,
     models::asset::{Asset, AssetWithCategories, CreateAssetRequest, UpdateAssetRequest},
     models::category::Category,
 };
 
-const ASSET_COLUMNS: &str =
+pub const ASSET_COLUMNS: &str =
     "id, owner_id, name, description, asset_type, size, storage_key, bucket, \
      caption, keywords, creator, copyright_notice, available, available_until, \
      is_locked, is_private, public_read, public_download, public_write, \
@@ -389,6 +390,8 @@ pub async fn upload_asset(
     let used_bytes: i64 = usage_row.get("used");
     auth_user.require_storage_quota(used_bytes - current_size, size)?;
 
+    let data_for_meta = data.clone();
+
     state
         .storage
         .upload(&storage_key, data, &content_type)
@@ -403,6 +406,14 @@ pub async fn upload_asset(
             &[&storage_key, &size, &id],
         )
         .await?;
+
+    // Extract and store metadata (best-effort; never fails the upload)
+    let extracted = tokio::task::spawn_blocking(move || metadata::extract_from_bytes(&data_for_meta))
+        .await
+        .unwrap_or_default();
+    if let Err(e) = metadata::store_metadata(&*client, id, &extracted).await {
+        tracing::warn!("Failed to store metadata for asset {id}: {e}");
+    }
 
     Ok(Json(Asset::from(&row)))
 }
@@ -768,6 +779,8 @@ pub async fn create_and_upload_asset(
     let used_bytes: i64 = usage_row.get("used");
     auth_user.require_storage_quota(used_bytes, size)?;
 
+    let data_for_meta = file_data.clone();
+
     // Upload first; on failure nothing is written to the DB
     state.storage.upload(&storage_key, file_data, &content_type_hdr).await?;
 
@@ -788,6 +801,14 @@ pub async fn create_and_upload_asset(
             ],
         )
         .await?;
+
+    // Extract and store metadata (best-effort; never fails the upload)
+    let extracted = tokio::task::spawn_blocking(move || metadata::extract_from_bytes(&data_for_meta))
+        .await
+        .unwrap_or_default();
+    if let Err(e) = metadata::store_metadata(&*client, asset_id, &extracted).await {
+        tracing::warn!("Failed to store metadata for asset {asset_id}: {e}");
+    }
 
     Ok((StatusCode::CREATED, Json(Asset::from(&row))))
 }

@@ -19,6 +19,7 @@ mod config;
 mod db;
 mod error;
 mod handlers;
+mod metadata;
 mod models;
 mod storage;
 
@@ -56,6 +57,10 @@ pub struct AppState {
         handlers::assets::get_thumbnail,
         handlers::assets::add_category_to_asset,
         handlers::assets::remove_category_from_asset,
+        handlers::metadata::get_asset_metadata,
+        handlers::metadata::refresh_asset_metadata,
+        handlers::search::search_assets,
+        handlers::search::search_nearby,
         handlers::categories::list_categories,
         handlers::categories::get_category,
         handlers::categories::create_category,
@@ -67,6 +72,9 @@ pub struct AppState {
         models::asset::AssetWithCategories,
         models::asset::CreateAssetRequest,
         models::asset::UpdateAssetRequest,
+        models::asset_metadata::AssetMetadata,
+        handlers::search::AssetSearchResult,
+        handlers::search::AssetMetadataSummary,
         models::category::AccessLevel,
         models::category::Category,
         models::category::CategoryWithChildren,
@@ -76,6 +84,8 @@ pub struct AppState {
     )),
     tags(
         (name = "assets", description = "Asset management"),
+        (name = "metadata", description = "Asset metadata (EXIF/IPTC/XMP)"),
+        (name = "search", description = "Metadata-driven asset search"),
         (name = "categories", description = "Category management"),
     )
 )]
@@ -114,6 +124,9 @@ async fn main() -> Result<()> {
     let app = Router::new()
         // Docs
         .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", ApiDoc::openapi()))
+        // Search (must be before /assets/:id to avoid capture)
+        .route("/assets/search", get(handlers::search::search_assets))
+        .route("/assets/search/nearby", get(handlers::search::search_nearby))
         // Assets
         .route("/assets", get(handlers::assets::list_assets).post(handlers::assets::create_asset))
         .route(
@@ -128,6 +141,8 @@ async fn main() -> Result<()> {
             .layer(DefaultBodyLimit::max(200 * 1024 * 1024)))
         .route("/assets/:id/download", get(handlers::assets::download_asset))
         .route("/assets/:id/thumbnail", get(handlers::assets::get_thumbnail))
+        .route("/assets/:id/metadata", get(handlers::metadata::get_asset_metadata))
+        .route("/assets/:id/metadata/refresh", post(handlers::metadata::refresh_asset_metadata))
         .route(
             "/assets/:asset_id/categories/:category_id",
             post(handlers::assets::add_category_to_asset)
