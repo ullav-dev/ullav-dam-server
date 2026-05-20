@@ -174,14 +174,16 @@ use crate::{
     AppState,
     auth::AuthUser,
     error::{AppError, AppResult},
+    metadata,
     models::asset::{Asset, AssetWithCategories, CreateAssetRequest, UpdateAssetRequest},
     models::category::Category,
 };
 
-const ASSET_COLUMNS: &str =
+pub const ASSET_COLUMNS: &str =
     "id, owner_id, name, description, asset_type, size, storage_key, bucket, \
      caption, keywords, creator, copyright_notice, available, available_until, \
      is_locked, is_private, public_read, public_download, public_write, \
+     team_id, custom_fields, \
      created_at, updated_at";
 
 // ── List all assets ───────────────────────────────────────────────────────────
@@ -285,6 +287,14 @@ pub async fn create_asset(
     let count: i64 = count_row.get("n");
     auth_user.require_asset_quota(count)?;
 
+    // Validate team membership and custom field types
+    if let Some(team_id) = &body.team_id {
+        auth_user.require_team_member(team_id)?;
+        if let Some(fields) = &body.custom_fields {
+            super::custom_fields::validate_custom_fields(&client, team_id, fields).await?;
+        }
+    }
+
     let storage_key = format!("pending/{}", Uuid::new_v4());
     let available = body.available.unwrap_or(true);
 
@@ -294,8 +304,9 @@ pub async fn create_asset(
                 "INSERT INTO assets \
                  (owner_id, name, description, asset_type, size, storage_key, bucket, \
                   caption, keywords, creator, copyright_notice, available, available_until, \
-                  is_locked, is_private, public_read, public_download, public_write) \
-                 VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17) \
+                  is_locked, is_private, public_read, public_download, public_write, \
+                  team_id, custom_fields) \
+                 VALUES ($1, $2, $3, $4, 0, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
@@ -316,6 +327,8 @@ pub async fn create_asset(
                 &body.public_read.unwrap_or(false),
                 &body.public_download.unwrap_or(false),
                 &body.public_write.unwrap_or(false),
+                &body.team_id,
+                &body.custom_fields,
             ],
         )
         .await?;
@@ -390,6 +403,8 @@ pub async fn upload_asset(
     let used_bytes: i64 = usage_row.get("used");
     auth_user.require_storage_quota(used_bytes - current_size, size)?;
 
+    let data_for_meta = data.clone();
+
     state
         .storage
         .upload(&storage_key, data, &content_type)
@@ -405,6 +420,14 @@ pub async fn upload_asset(
             &[&storage_key, &size, &id],
         )
         .await?;
+
+    // Extract and store metadata (best-effort; never fails the upload)
+    let extracted = tokio::task::spawn_blocking(move || metadata::extract_from_bytes(data_for_meta))
+        .await
+        .unwrap_or_default();
+    if let Err(e) = metadata::store_metadata(&*client, id, &extracted).await {
+        tracing::warn!("Failed to store metadata for asset {id}: {e}");
+    }
 
     Ok(Json(Asset::from(&row)))
 }
@@ -501,6 +524,16 @@ pub async fn update_asset(
     let public_read = body.public_read.unwrap_or(current.public_read);
     let public_download = body.public_download.unwrap_or(current.public_download);
     let public_write = body.public_write.unwrap_or(current.public_write);
+    let team_id = body.team_id.or(current.team_id);
+    let custom_fields = body.custom_fields.or(current.custom_fields);
+
+    // Validate team membership and custom field types if being set
+    if let Some(tid) = &team_id {
+        auth_user.require_team_member(tid)?;
+        if let Some(fields) = &custom_fields {
+            super::custom_fields::validate_custom_fields(&client, tid, fields).await?;
+        }
+    }
 
     let updated = client
         .query_one(
@@ -509,8 +542,9 @@ pub async fn update_asset(
                  SET name = $1, description = $2, asset_type = $3, \
                      caption = $4, keywords = $5, creator = $6, copyright_notice = $7, \
                      available = $8, available_until = $9, is_locked = $10, \
-                     is_private = $11, public_read = $12, public_download = $13, public_write = $14 \
-                 WHERE id = $15 \
+                     is_private = $11, public_read = $12, public_download = $13, public_write = $14, \
+                     team_id = $15, custom_fields = $16 \
+                 WHERE id = $17 \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
@@ -518,6 +552,7 @@ pub async fn update_asset(
                 &caption, &keywords, &creator, &copyright_notice,
                 &available, &available_until, &is_locked,
                 &is_private, &public_read, &public_download, &public_write,
+                &team_id, &custom_fields,
                 &id,
             ],
         )
@@ -616,6 +651,10 @@ struct UploadAssetForm {
     /// Allow unauthenticated write (`"true"` or `"false"`). Defaults to `"false"`.
     #[schema(example = "false")]
     public_write: Option<String>,
+    /// Team UUID to assign this asset to. Must be a team the user belongs to.
+    team_id: Option<String>,
+    /// Custom field values as a JSON object string (e.g. `{"project_code":"ARCH-2024"}`).
+    custom_fields: Option<String>,
 }
 
 #[utoipa::path(
@@ -650,6 +689,8 @@ pub async fn create_and_upload_asset(
     let mut public_read: Option<bool> = None;
     let mut public_download: Option<bool> = None;
     let mut public_write: Option<bool> = None;
+    let mut team_id: Option<String> = None;
+    let mut custom_fields: Option<serde_json::Value> = None;
     let mut file_data: Option<bytes::Bytes> = None;
     let mut file_name: Option<String> = None;
     let mut content_type_hdr = "application/octet-stream".to_string();
@@ -675,7 +716,7 @@ pub async fn create_and_upload_asset(
             Some(key @ ("name" | "description" | "asset_type" | "caption" | "keywords"
                         | "creator" | "copyright_notice" | "available" | "available_until"
                         | "is_locked" | "is_private" | "public_read" | "public_download"
-                        | "public_write")) => {
+                        | "public_write" | "team_id" | "custom_fields")) => {
                 let v = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
                 if v.is_empty() {
                     continue;
@@ -711,6 +752,15 @@ pub async fn create_and_upload_asset(
                             v.parse::<chrono::DateTime<chrono::Utc>>()
                                 .map_err(|_| AppError::BadRequest(
                                     "available_until must be an ISO 8601 datetime (e.g. 2026-12-31T00:00:00Z)".into(),
+                                ))?,
+                        );
+                    }
+                    "team_id" => team_id = Some(v),
+                    "custom_fields" => {
+                        custom_fields = Some(
+                            serde_json::from_str(&v)
+                                .map_err(|_| AppError::BadRequest(
+                                    "custom_fields must be a valid JSON object string".into(),
                                 ))?,
                         );
                     }
@@ -774,6 +824,16 @@ pub async fn create_and_upload_asset(
     let used_bytes: i64 = usage_row.get("used");
     auth_user.require_storage_quota(used_bytes, size)?;
 
+    // Validate team membership and custom field types
+    if let Some(tid) = &team_id {
+        auth_user.require_team_member(tid)?;
+        if let Some(fields) = &custom_fields {
+            super::custom_fields::validate_custom_fields(&client, tid, fields).await?;
+        }
+    }
+
+    let data_for_meta = file_data.clone();
+
     // Upload first; on failure nothing is written to the DB
     state.storage.upload(&storage_key, file_data, &content_type_hdr).await?;
 
@@ -783,17 +843,27 @@ pub async fn create_and_upload_asset(
                 "INSERT INTO assets \
                  (id, owner_id, name, description, asset_type, size, storage_key, bucket, \
                   caption, keywords, creator, copyright_notice, available, available_until, \
-                  is_locked, is_private, public_read, public_download, public_write) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19) \
+                  is_locked, is_private, public_read, public_download, public_write, \
+                  team_id, custom_fields) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
                 &asset_id, &auth_user.user_id, &name, &description, &asset_type, &size, &storage_key, &state.storage.bucket,
                 &caption, &keywords, &creator, &copyright_notice, &available, &available_until,
                 &is_locked, &is_private, &public_read, &public_download, &public_write,
+                &team_id, &custom_fields,
             ],
         )
         .await?;
+
+    // Extract and store metadata (best-effort; never fails the upload)
+    let extracted = tokio::task::spawn_blocking(move || metadata::extract_from_bytes(data_for_meta))
+        .await
+        .unwrap_or_default();
+    if let Err(e) = metadata::store_metadata(&*client, asset_id, &extracted).await {
+        tracing::warn!("Failed to store metadata for asset {asset_id}: {e}");
+    }
 
     Ok((StatusCode::CREATED, Json(Asset::from(&row))))
 }

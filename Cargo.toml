@@ -76,6 +76,15 @@ tempfile = "3"
 # ZIP extraction for Apple iWork thumbnail extraction (Pages, Numbers, Keynote)
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# EXIF metadata extraction (pure Rust)
+kamadak-exif = "0.5"
+
+# JPEG/PNG/WebP segment access for IPTC and XMP extraction
+img-parts = "0.3"
+
+# XMP XML parsing
+roxmltree = "0.20"
+
 [profile.release]
 opt-level = 3
 lto = true

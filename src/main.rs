@@ -3,7 +3,7 @@ use axum::{
     Router,
     extract::{DefaultBodyLimit, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use bytes::Bytes;
 use lru::LruCache;
@@ -21,6 +21,7 @@ mod config;
 mod db;
 mod error;
 mod handlers;
+mod metadata;
 mod models;
 mod storage;
 
@@ -62,29 +63,47 @@ pub struct AppState {
         handlers::assets::delete_thumbnail,
         handlers::assets::add_category_to_asset,
         handlers::assets::remove_category_from_asset,
+        handlers::metadata::get_asset_metadata,
+        handlers::metadata::refresh_asset_metadata,
+        handlers::search::search_assets,
+        handlers::search::search_nearby,
         handlers::assets::get_usage,
         handlers::categories::list_categories,
         handlers::categories::get_category,
         handlers::categories::create_category,
         handlers::categories::update_category,
         handlers::categories::delete_category,
+        handlers::custom_fields::list_schemas,
+        handlers::custom_fields::create_schema,
+        handlers::custom_fields::update_schema,
+        handlers::custom_fields::delete_schema,
     ),
     components(schemas(
         models::asset::Asset,
         models::asset::AssetWithCategories,
         models::asset::CreateAssetRequest,
         models::asset::UpdateAssetRequest,
+        models::asset_metadata::AssetMetadata,
+        handlers::search::AssetSearchResult,
+        handlers::search::AssetMetadataSummary,
         handlers::assets::UsageSummary,
         models::category::AccessLevel,
         models::category::Category,
         models::category::CategoryWithChildren,
         models::category::CreateCategoryRequest,
         models::category::UpdateCategoryRequest,
+        models::custom_field_schema::CustomFieldSchema,
+        models::custom_field_schema::FieldType,
+        models::custom_field_schema::CreateCustomFieldSchemaRequest,
+        models::custom_field_schema::UpdateCustomFieldSchemaRequest,
         error::ErrorResponse,
     )),
     tags(
         (name = "assets", description = "Asset management"),
+        (name = "metadata", description = "Asset metadata (EXIF/IPTC/XMP)"),
+        (name = "search", description = "Metadata-driven asset search"),
         (name = "categories", description = "Category management"),
+        (name = "custom-fields", description = "Team custom field schema management"),
     )
 )]
 struct ApiDoc;
@@ -150,6 +169,9 @@ async fn main() -> Result<()> {
         .route("/health", get(health))
         // Auth proxy (forwards to ullav-user-management)
         .route("/auth/login", post(handlers::auth::login))
+        // Search (must be before /assets/:id to avoid capture)
+        .route("/assets/search", get(handlers::search::search_assets))
+        .route("/assets/search/nearby", get(handlers::search::search_nearby))
         // Assets
         .route("/usage", get(handlers::assets::get_usage))
         .route("/assets", get(handlers::assets::list_assets).post(handlers::assets::create_asset))
@@ -165,6 +187,8 @@ async fn main() -> Result<()> {
             .layer(DefaultBodyLimit::max(200 * 1024 * 1024)))
         .route("/assets/:id/download", get(handlers::assets::download_asset))
         .route("/assets/:id/thumbnail", get(handlers::assets::get_thumbnail).delete(handlers::assets::delete_thumbnail))
+        .route("/assets/:id/metadata", get(handlers::metadata::get_asset_metadata))
+        .route("/assets/:id/metadata/refresh", post(handlers::metadata::refresh_asset_metadata))
         .route(
             "/assets/:asset_id/categories/:category_id",
             post(handlers::assets::add_category_to_asset)
@@ -180,6 +204,17 @@ async fn main() -> Result<()> {
             get(handlers::categories::get_category)
                 .put(handlers::categories::update_category)
                 .delete(handlers::categories::delete_category),
+        )
+        // Custom field schemas (team-scoped)
+        .route(
+            "/teams/:team_id/custom-field-schemas",
+            get(handlers::custom_fields::list_schemas)
+                .post(handlers::custom_fields::create_schema),
+        )
+        .route(
+            "/teams/:team_id/custom-field-schemas/:schema_id",
+            put(handlers::custom_fields::update_schema)
+                .delete(handlers::custom_fields::delete_schema),
         )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

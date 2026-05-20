@@ -20,12 +20,20 @@ struct SubscriptionClaim {
 }
 
 #[derive(Debug, Deserialize)]
+struct TeamClaim {
+    pub role: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct Claims {
     pub sub: String,
     #[serde(default)]
     pub roles: Vec<String>,
     #[serde(default)]
     pub subscriptions: HashMap<String, SubscriptionClaim>,
+    /// Active team memberships keyed by team UUID string.
+    #[serde(default)]
+    pub teams: HashMap<String, TeamClaim>,
 }
 
 // ── DAM access level ──────────────────────────────────────────────────────────
@@ -37,18 +45,18 @@ struct Claims {
 /// 2. `subscriptions["clann"].tier` (bundled DAM access via Clann plan)
 ///
 /// Comad mapping:
-/// - `individual` → `ImagesOnly`
+/// - `individual` → `ImagesOnly` (images + PDFs)
 /// - `team` / `enterprise` → `Full`
 ///
 /// Clann fallback mapping:
-/// - `family` → `ImagesOnly`
+/// - `family` → `ImagesOnly` (images + PDFs)
 /// - `professional` / `enterprise` → `Full`
 /// - Anything else → `None`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DamAccess {
     /// No DAM access (no active subscription).
     None,
-    /// Image uploads only (Comad Individual or Clann Family).
+    /// Images and PDF uploads only (Comad Individual or Clann Family).
     ImagesOnly,
     /// Full unrestricted access (Comad Team/Enterprise or Clann Professional/Enterprise).
     Full,
@@ -68,6 +76,8 @@ pub struct AuthUser {
     pub storage_limit_bytes: Option<i64>,
     /// Maximum number of categories the user may create. `None` = unlimited.
     pub category_limit: Option<i64>,
+    /// Active team memberships: team UUID → role (`"owner"` | `"leader"` | `"member"`).
+    pub teams: HashMap<String, String>,
 }
 
 fn resolve_dam_access(
@@ -150,6 +160,12 @@ where
         let (dam_access, asset_limit, storage_limit_bytes, category_limit) =
             resolve_dam_access(&claims.roles, &claims.subscriptions);
 
+        let teams = claims
+            .teams
+            .into_iter()
+            .map(|(id, claim)| (id, claim.role))
+            .collect();
+
         Ok(AuthUser {
             user_id: claims.sub,
             is_admin: claims.roles.iter().any(|r| r == "admin"),
@@ -157,6 +173,7 @@ where
             asset_limit,
             storage_limit_bytes,
             category_limit,
+            teams,
         })
     }
 }
@@ -173,12 +190,13 @@ impl AuthUser {
     }
 
     /// Returns `Err(Forbidden)` if the MIME type is not allowed for this plan.
-    /// ImagesOnly users may only upload image/* types.
+    /// ImagesOnly users may upload image/* and application/pdf.
     pub fn require_mime_allowed(&self, mime: &str) -> AppResult<()> {
         self.require_access()?;
-        if self.dam_access == DamAccess::ImagesOnly && !mime.starts_with("image/") {
+        let allowed = mime.starts_with("image/") || mime == "application/pdf";
+        if self.dam_access == DamAccess::ImagesOnly && !allowed {
             return Err(AppError::Forbidden(
-                "Your plan only allows image uploads. \
+                "Your plan only allows image and PDF uploads. \
                  Upgrade to Comad Team for all file types."
                     .into(),
             ));
@@ -225,6 +243,29 @@ impl AuthUser {
         }
         Ok(())
     }
+
+    /// Returns `Err(Forbidden)` if the user is not a member of the given team.
+    pub fn require_team_member(&self, team_id: &str) -> AppResult<()> {
+        if !self.teams.contains_key(team_id) {
+            return Err(AppError::Forbidden(format!(
+                "Not a member of team {team_id}"
+            )));
+        }
+        Ok(())
+    }
+
+    /// Returns `Err(Forbidden)` if the user is not an owner or leader of the given team.
+    pub fn require_team_admin(&self, team_id: &str) -> AppResult<()> {
+        match self.teams.get(team_id).map(|r| r.as_str()) {
+            Some("owner" | "leader") => Ok(()),
+            Some(_) => Err(AppError::Forbidden(
+                "Team owner or leader role required".into(),
+            )),
+            None => Err(AppError::Forbidden(format!(
+                "Not a member of team {team_id}"
+            ))),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -253,6 +294,7 @@ mod tests {
             asset_limit,
             storage_limit_bytes,
             category_limit,
+            teams: HashMap::new(),
         }
     }
 
@@ -377,9 +419,9 @@ mod tests {
     }
 
     #[test]
-    fn require_mime_allowed_blocks_non_image_for_images_only() {
+    fn require_mime_allowed_allows_image_and_pdf_for_images_only() {
         let user = auth_user(DamAccess::ImagesOnly, None, None, None);
-        assert!(user.require_mime_allowed("application/pdf").is_err());
+        assert!(user.require_mime_allowed("application/pdf").is_ok());
         assert!(user.require_mime_allowed("video/mp4").is_err());
         assert!(user.require_mime_allowed("image/jpeg").is_ok());
         assert!(user.require_mime_allowed("image/png").is_ok());
