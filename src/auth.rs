@@ -45,18 +45,18 @@ struct Claims {
 /// 2. `subscriptions["clann"].tier` (bundled DAM access via Clann plan)
 ///
 /// Comad mapping:
-/// - `individual` → `ImagesOnly`
+/// - `individual` → `ImagesOnly` (images + PDFs)
 /// - `team` / `enterprise` → `Full`
 ///
 /// Clann fallback mapping:
-/// - `family` → `ImagesOnly`
+/// - `family` → `ImagesOnly` (images + PDFs)
 /// - `professional` / `enterprise` → `Full`
 /// - Anything else → `None`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DamAccess {
     /// No DAM access (no active subscription).
     None,
-    /// Image uploads only (Comad Individual or Clann Family).
+    /// Images and PDF uploads only (Comad Individual or Clann Family).
     ImagesOnly,
     /// Full unrestricted access (Comad Team/Enterprise or Clann Professional/Enterprise).
     Full,
@@ -163,12 +163,13 @@ impl AuthUser {
     }
 
     /// Returns `Err(Forbidden)` if the MIME type is not allowed for this plan.
-    /// ImagesOnly users may only upload image/* types.
+    /// ImagesOnly users may upload image/* and application/pdf.
     pub fn require_mime_allowed(&self, mime: &str) -> AppResult<()> {
         self.require_access()?;
-        if self.dam_access == DamAccess::ImagesOnly && !mime.starts_with("image/") {
+        let allowed = mime.starts_with("image/") || mime == "application/pdf";
+        if self.dam_access == DamAccess::ImagesOnly && !allowed {
             return Err(AppError::Forbidden(
-                "Your plan only allows image uploads. \
+                "Your plan only allows image and PDF uploads. \
                  Upgrade to Comad Team for all file types."
                     .into(),
             ));
