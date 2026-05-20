@@ -36,6 +36,12 @@ pub async fn run_migrations(pool: &Pool) -> Result<()> {
     let sql = include_str!("../migrations/006_owner_id.sql");
     client.batch_execute(sql).await.context("Failed to run migration 006")?;
 
+    let sql = include_str!("../migrations/007_category_owner_id.sql");
+    client.batch_execute(sql).await.context("Failed to run migration 007")?;
+
+    let sql = include_str!("../migrations/008_delete_ownerless_categories.sql");
+    client.batch_execute(sql).await.context("Failed to run migration 008")?;
+
     let sql = include_str!("../migrations/009_asset_metadata.sql");
     client.batch_execute(sql).await.context("Failed to run migration 009")?;
 

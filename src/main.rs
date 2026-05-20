@@ -1,13 +1,15 @@
 use anyhow::Result;
 use axum::{
     Router,
-    extract::DefaultBodyLimit,
+    extract::{DefaultBodyLimit, State},
+    http::StatusCode,
     routing::{get, post, put},
 };
 use bytes::Bytes;
-use std::collections::HashMap;
+use lru::LruCache;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::Mutex;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 use utoipa::OpenApi;
@@ -27,7 +29,7 @@ use config::Config;
 use db::DbPool;
 use storage::StorageClient;
 
-pub type ThumbnailCache = Arc<RwLock<HashMap<Uuid, Bytes>>>;
+pub type ThumbnailCache = Arc<Mutex<LruCache<Uuid, Bytes>>>;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -36,6 +38,8 @@ pub struct AppState {
     pub thumbnail_cache: ThumbnailCache,
     pub thumbnail_size: u32,
     pub jwt_secret: String,
+    pub auth_service_url: String,
+    pub auth_client: reqwest::Client,
 }
 
 #[derive(OpenApi)]
@@ -46,6 +50,7 @@ pub struct AppState {
         description = "Digital Asset Management HTTP API"
     ),
     paths(
+        health,
         handlers::assets::list_assets,
         handlers::assets::get_asset,
         handlers::assets::create_asset,
@@ -55,12 +60,14 @@ pub struct AppState {
         handlers::assets::delete_asset,
         handlers::assets::create_and_upload_asset,
         handlers::assets::get_thumbnail,
+        handlers::assets::delete_thumbnail,
         handlers::assets::add_category_to_asset,
         handlers::assets::remove_category_from_asset,
         handlers::metadata::get_asset_metadata,
         handlers::metadata::refresh_asset_metadata,
         handlers::search::search_assets,
         handlers::search::search_nearby,
+        handlers::assets::get_usage,
         handlers::categories::list_categories,
         handlers::categories::get_category,
         handlers::categories::create_category,
@@ -79,6 +86,7 @@ pub struct AppState {
         models::asset_metadata::AssetMetadata,
         handlers::search::AssetSearchResult,
         handlers::search::AssetMetadataSummary,
+        handlers::assets::UsageSummary,
         models::category::AccessLevel,
         models::category::Category,
         models::category::CategoryWithChildren,
@@ -99,6 +107,26 @@ pub struct AppState {
     )
 )]
 struct ApiDoc;
+
+/// Check service health (liveness + DB connectivity)
+#[utoipa::path(
+    get,
+    path = "/health",
+    responses(
+        (status = 200, description = "Service is healthy"),
+        (status = 503, description = "Database unavailable"),
+    ),
+    tag = "health"
+)]
+async fn health(State(state): State<AppState>) -> StatusCode {
+    match state.db.get().await {
+        Ok(client) => match client.query_one("SELECT 1", &[]).await {
+            Ok(_) => StatusCode::OK,
+            Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+        },
+        Err(_) => StatusCode::SERVICE_UNAVAILABLE,
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -125,18 +153,27 @@ async fn main() -> Result<()> {
     let state = AppState {
         db: pool,
         storage,
-        thumbnail_cache: Arc::new(RwLock::new(HashMap::new())),
+        thumbnail_cache: Arc::new(Mutex::new(LruCache::new(
+            NonZeroUsize::new(cfg.thumbnail_cache_capacity).unwrap_or(NonZeroUsize::new(512).unwrap()),
+        ))),
         thumbnail_size: cfg.thumbnail_size,
         jwt_secret: cfg.jwt_secret,
+        auth_service_url: cfg.auth_service_url,
+        auth_client: reqwest::Client::new(),
     };
 
     let app = Router::new()
         // Docs
         .merge(SwaggerUi::new("/docs").url("/api-doc/openapi.json", ApiDoc::openapi()))
+        // Health
+        .route("/health", get(health))
+        // Auth proxy (forwards to ullav-user-management)
+        .route("/auth/login", post(handlers::auth::login))
         // Search (must be before /assets/:id to avoid capture)
         .route("/assets/search", get(handlers::search::search_assets))
         .route("/assets/search/nearby", get(handlers::search::search_nearby))
         // Assets
+        .route("/usage", get(handlers::assets::get_usage))
         .route("/assets", get(handlers::assets::list_assets).post(handlers::assets::create_asset))
         .route(
             "/assets/:id",
@@ -149,7 +186,7 @@ async fn main() -> Result<()> {
         .route("/assets/:id/upload", post(handlers::assets::upload_asset)
             .layer(DefaultBodyLimit::max(200 * 1024 * 1024)))
         .route("/assets/:id/download", get(handlers::assets::download_asset))
-        .route("/assets/:id/thumbnail", get(handlers::assets::get_thumbnail))
+        .route("/assets/:id/thumbnail", get(handlers::assets::get_thumbnail).delete(handlers::assets::delete_thumbnail))
         .route("/assets/:id/metadata", get(handlers::metadata::get_asset_metadata))
         .route("/assets/:id/metadata/refresh", post(handlers::metadata::refresh_asset_metadata))
         .route(

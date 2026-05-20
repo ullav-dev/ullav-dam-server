@@ -107,6 +107,38 @@ impl StorageClient {
         Ok(data)
     }
 
+    /// Download an object, returning `None` if the key does not exist (404).
+    /// All other S3 errors are returned as `Err`.
+    pub async fn try_download(&self, key: &str) -> Result<Option<Bytes>, AppError> {
+        use aws_sdk_s3::operation::get_object::GetObjectError;
+
+        match self
+            .client
+            .get_object()
+            .bucket(&self.bucket)
+            .key(key)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let data = resp
+                    .body
+                    .collect()
+                    .await
+                    .map_err(|e| AppError::Storage(e.to_string()))?
+                    .into_bytes();
+                Ok(Some(data))
+            }
+            Err(e) => {
+                if matches!(e.as_service_error(), Some(GetObjectError::NoSuchKey(_))) {
+                    Ok(None)
+                } else {
+                    Err(AppError::Storage(e.to_string()))
+                }
+            }
+        }
+    }
+
     pub async fn delete(&self, key: &str) -> Result<(), AppError> {
         self.client
             .delete_object()

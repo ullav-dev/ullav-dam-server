@@ -303,6 +303,7 @@ mod tests {
             parent_id: None,
             access_level: crate::models::category::AccessLevel::Private,
             creator: None,
+            owner_id: "test-owner".to_string(),
             created_at: cat_now,
             updated_at: cat_now,
         };

@@ -1,4 +1,5 @@
 pub mod assets;
+pub mod auth;
 pub mod categories;
 pub mod custom_fields;
 pub mod metadata;

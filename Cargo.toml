@@ -34,6 +34,9 @@ serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 
+# Bounded LRU cache for thumbnails
+lru = "0.12"
+
 # Config & env
 dotenvy = "0.15"
 
@@ -57,6 +60,9 @@ mime_guess = "2"
 
 # JWT validation
 jsonwebtoken = "9"
+
+# HTTP client (auth proxy)
+reqwest = { version = "0.12", features = ["json"] }
 
 # Image processing for thumbnails
 image = "0.25"

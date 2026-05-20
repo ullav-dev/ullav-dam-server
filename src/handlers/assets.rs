@@ -6,6 +6,7 @@ use axum::{
     Json,
 };
 use image::{ImageFormat, imageops::FilterType};
+use serde::Serialize;
 use std::io::Cursor;
 use uuid::Uuid;
 
@@ -243,7 +244,7 @@ pub async fn get_asset(
 
     let cat_rows = client
         .query(
-            "SELECT c.id, c.name, c.description, c.parent_id, c.creator, c.access_level, c.created_at, c.updated_at
+            "SELECT c.id, c.name, c.description, c.parent_id, c.creator, c.access_level, c.owner_id, c.created_at, c.updated_at
              FROM categories c
              JOIN asset_categories ac ON ac.category_id = c.id
              WHERE ac.asset_id = $1",
@@ -409,8 +410,9 @@ pub async fn upload_asset(
         .upload(&storage_key, data, &content_type)
         .await?;
 
-    // Evict stale thumbnail so the next request regenerates from the new file
-    state.thumbnail_cache.write().await.remove(&id);
+    // Evict stale thumbnail from both memory and S3 so the next request regenerates from the new file
+    state.thumbnail_cache.lock().await.pop(&id);
+    let _ = state.storage.delete(&format!("thumbnails/{id}.png")).await;
 
     let row = client
         .query_one(
@@ -594,10 +596,14 @@ pub async fn delete_asset(
 
     let storage_key: String = row.get("storage_key");
 
-    // Delete from storage (best-effort; file may not have been uploaded yet)
+    // Delete original from storage (best-effort; file may not have been uploaded yet)
     if !storage_key.starts_with("pending/") {
         let _ = state.storage.delete(&storage_key).await;
     }
+
+    // Delete S3 thumbnail and evict from memory cache (best-effort)
+    let _ = state.storage.delete(&format!("thumbnails/{id}.png")).await;
+    state.thumbnail_cache.lock().await.pop(&id);
 
     client
         .execute("DELETE FROM assets WHERE id = $1", &[&id])
@@ -967,15 +973,22 @@ pub async fn get_thumbnail(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
-    // 1. Check in-memory cache before hitting the database
+    // 1. In-memory LRU cache (hot path — no I/O)
     {
-        let cache = state.thumbnail_cache.read().await;
+        let mut cache = state.thumbnail_cache.lock().await;
         if let Some(cached) = cache.get(&id) {
             return Ok(build_thumbnail_response(cached.clone(), "image/png"));
         }
     }
 
-    // 2. Fetch asset metadata
+    // 2. S3-persisted thumbnail — survives restarts, avoids re-rendering
+    let thumb_key = format!("thumbnails/{id}.png");
+    if let Some(png) = state.storage.try_download(&thumb_key).await? {
+        state.thumbnail_cache.lock().await.put(id, png.clone());
+        return Ok(build_thumbnail_response(png, "image/png"));
+    }
+
+    // 3. Fetch asset metadata
     let client = state.db.get().await?;
     let row = client
         .query_opt(
@@ -988,9 +1001,7 @@ pub async fn get_thumbnail(
     let storage_key: String = row.get("storage_key");
     let asset_type: String = row.get("asset_type");
 
-    // 3. Only raster images, PDFs, Office documents, and iWork files get
-    //    rendered; everything else (SVG, video, audio…) and pending (not yet
-    //    uploaded) assets return the SVG fallback icon immediately.
+    // 4. Non-renderable types and pending assets get an SVG fallback immediately
     let is_raster = asset_type.starts_with("image/") && asset_type != "image/svg+xml";
     let is_pdf = asset_type == "application/pdf";
     let office_ext = office_mime_to_ext(&asset_type);
@@ -1003,11 +1014,11 @@ pub async fn get_thumbnail(
         return Ok(build_thumbnail_response(bytes::Bytes::from(svg), "image/svg+xml"));
     }
 
-    // 4. Download the raw file from storage
+    // 5. Download the raw file from storage
     let raw = state.storage.download(&storage_key).await?;
     let size = state.thumbnail_size;
 
-    // 5. Render on a blocking thread (CPU-bound — must not block the async runtime)
+    // 6. Render on a blocking thread (CPU-bound — must not block the async runtime)
     let result = tokio::task::spawn_blocking(move || -> Result<bytes::Bytes, String> {
         if is_pdf {
             render_pdf_thumbnail(&raw, size)
@@ -1016,10 +1027,22 @@ pub async fn get_thumbnail(
         } else if is_iwork {
             extract_iwork_thumbnail(&raw, size)
         } else {
+            // Read EXIF orientation before consuming `raw` (cheap — Bytes is ref-counted).
+            // JpegDecoder::orientation() gracefully returns an error for non-JPEG formats,
+            // so we fall back to NoTransforms (identity) for PNG, WebP, etc.
+            let orientation = {
+                use image::codecs::jpeg::JpegDecoder;
+                use image::ImageDecoder;
+                JpegDecoder::new(Cursor::new(&raw[..]))
+                    .ok()
+                    .and_then(|mut d| d.orientation().ok())
+                    .unwrap_or(image::metadata::Orientation::NoTransforms)
+            };
             let reader = image::ImageReader::new(Cursor::new(raw))
                 .with_guessed_format()
                 .map_err(|e| e.to_string())?;
-            let img = reader.decode().map_err(|e| e.to_string())?;
+            let mut img = reader.decode().map_err(|e| e.to_string())?;
+            img.apply_orientation(orientation);
             let thumb = img.resize(size, size, FilterType::Lanczos3);
             let mut buf = Cursor::new(Vec::new());
             thumb.write_to(&mut buf, ImageFormat::Png).map_err(|e| e.to_string())?;
@@ -1029,7 +1052,7 @@ pub async fn get_thumbnail(
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("thumbnail thread panicked: {e}")))?;
 
-    // 6. On failure fall back to the icon rather than returning an error to the client
+    // 7. Render failure → SVG fallback (non-fatal)
     let png = match result {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -1039,10 +1062,45 @@ pub async fn get_thumbnail(
         }
     };
 
-    // 7. Write into cache
-    state.thumbnail_cache.write().await.insert(id, png.clone());
+    // 8. Persist to S3 so future restarts don't re-render (non-fatal if it fails)
+    if let Err(e) = state.storage.upload(&thumb_key, png.clone(), "image/png").await {
+        tracing::warn!("Failed to persist thumbnail to S3 for asset {id}: {e}");
+    }
+
+    // 9. Warm the in-memory cache
+    state.thumbnail_cache.lock().await.put(id, png.clone());
 
     Ok(build_thumbnail_response(png, "image/png"))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/assets/{id}/thumbnail",
+    tag = "assets",
+    params(
+        ("id" = uuid::Uuid, Path, description = "Asset ID"),
+    ),
+    responses(
+        (status = 204, description = "Cache entry evicted; next GET will regenerate the thumbnail"),
+        (status = 404, description = "Asset not found", body = ErrorResponse),
+    )
+)]
+pub async fn delete_thumbnail(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> AppResult<StatusCode> {
+    let client = state.db.get().await?;
+    let exists = client
+        .query_opt("SELECT 1 FROM assets WHERE id = $1 AND owner_id = $2", &[&id, &auth_user.user_id])
+        .await?;
+    if exists.is_none() {
+        return Err(AppError::NotFound(format!("Asset {id} not found")));
+    }
+    state.thumbnail_cache.lock().await.pop(&id);
+    // S3 delete is idempotent — no error if no thumbnail was ever stored
+    let _ = state.storage.delete(&format!("thumbnails/{id}.png")).await;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn build_thumbnail_response(data: bytes::Bytes, content_type: &'static str) -> Response {
@@ -1052,4 +1110,66 @@ fn build_thumbnail_response(data: bytes::Bytes, content_type: &'static str) -> R
         .header(header::CACHE_CONTROL, "public, max-age=86400")
         .body(Body::from(data))
         .expect("static header values are always valid")
+}
+
+// ── Usage summary ─────────────────────────────────────────────────────────────
+
+#[derive(Serialize, utoipa::ToSchema)]
+pub struct UsageSummary {
+    /// Total bytes stored by this user across all assets.
+    pub used_bytes: i64,
+    /// Number of assets owned by this user.
+    pub asset_count: i64,
+    /// Maximum bytes allowed by the plan. `null` means unlimited.
+    pub storage_limit_bytes: Option<i64>,
+    /// Maximum asset count allowed by the plan. `null` means unlimited.
+    pub asset_limit: Option<i64>,
+    /// Number of categories created by this user.
+    pub category_count: i64,
+    /// Maximum categories the user may create. `null` means unlimited.
+    pub category_limit: Option<i64>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/usage",
+    tag = "assets",
+    responses(
+        (status = 200, description = "Current usage totals and plan limits", body = UsageSummary),
+        (status = 401, description = "Unauthorized"),
+        (status = 403, description = "No DAM access"),
+    ),
+    security(("bearer_auth" = []))
+)]
+pub async fn get_usage(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+) -> AppResult<Json<UsageSummary>> {
+    auth_user.require_access()?;
+    let client = state.db.get().await?;
+
+    let row = client
+        .query_one(
+            "SELECT COUNT(*) AS asset_count, \
+             CAST(COALESCE(SUM(size), 0) AS BIGINT) AS used_bytes \
+             FROM assets WHERE owner_id = $1",
+            &[&auth_user.user_id],
+        )
+        .await?;
+
+    let cat_row = client
+        .query_one(
+            "SELECT COUNT(*) AS category_count FROM categories WHERE owner_id = $1",
+            &[&auth_user.user_id],
+        )
+        .await?;
+
+    Ok(Json(UsageSummary {
+        asset_count: row.try_get("asset_count")?,
+        used_bytes: row.try_get("used_bytes")?,
+        storage_limit_bytes: auth_user.storage_limit_bytes,
+        asset_limit: auth_user.asset_limit,
+        category_count: cat_row.try_get("category_count")?,
+        category_limit: auth_user.category_limit,
+    }))
 }
