@@ -201,8 +201,12 @@ pub async fn list_assets(auth_user: AuthUser, State(state): State<AppState>) -> 
     let client = state.db.get().await?;
     let rows = client
         .query(
-            &format!("SELECT {ASSET_COLUMNS} FROM assets ORDER BY created_at DESC"),
-            &[],
+            &format!(
+                "SELECT {ASSET_COLUMNS} FROM assets \
+                 WHERE owner_id = $1 OR is_private = false \
+                 ORDER BY created_at DESC"
+            ),
+            &[&auth_user.user_id],
         )
         .await?;
 
