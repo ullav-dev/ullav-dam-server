@@ -13,7 +13,7 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
-# macOS
+# macOS as usual
 .DS_Store
 
 # Local environment — contains secrets
