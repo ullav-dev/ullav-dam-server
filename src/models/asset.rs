@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use tokio_postgres::Row;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use crate::models::category::Category;
@@ -71,6 +71,34 @@ pub struct AssetWithCategories {
     #[serde(flatten)]
     pub asset: Asset,
     pub categories: Vec<Category>,
+}
+
+/// Query parameters for `GET /assets`.
+#[derive(Debug, Default, Deserialize, ToSchema, IntoParams)]
+pub struct AssetQuery {
+    /// Filter to assets belonging to this category (UUID).
+    pub category_id: Option<Uuid>,
+    /// Full-text substring search across name, caption, description, keywords, creator.
+    pub q: Option<String>,
+    /// When `true`, return only assets owned by the requesting user.
+    pub my_assets: Option<bool>,
+    /// Sort field: `name`, `asset_type`, `size`, or `created_at` (default).
+    pub sort_field: Option<String>,
+    /// Sort direction: `asc` or `desc` (default).
+    pub sort_dir: Option<String>,
+    /// 1-based page number (default 1).
+    pub page: Option<i64>,
+    /// Items per page, 1–200 (default 20).
+    pub per_page: Option<i64>,
+}
+
+/// Paginated asset list returned by `GET /assets`.
+#[derive(Debug, Serialize, ToSchema)]
+pub struct AssetPage {
+    pub items: Vec<AssetWithCategories>,
+    pub total: i64,
+    pub page: i64,
+    pub per_page: i64,
 }
 
 /// Request body for creating an asset record (before file upload).

@@ -81,6 +81,8 @@ pub struct AppState {
     components(schemas(
         models::asset::Asset,
         models::asset::AssetWithCategories,
+        models::asset::AssetPage,
+        models::asset::AssetQuery,
         models::asset::CreateAssetRequest,
         models::asset::UpdateAssetRequest,
         models::asset_metadata::AssetMetadata,

@@ -1,10 +1,11 @@
 use axum::{
     body::Body,
-    extract::{Multipart, Path, State},
+    extract::{Multipart, Path, Query, State},
     http::{header, StatusCode},
     response::Response,
     Json,
 };
+use std::collections::{HashMap, HashSet};
 use image::{ImageFormat, imageops::FilterType};
 use serde::Serialize;
 use std::io::Cursor;
@@ -175,7 +176,7 @@ use crate::{
     auth::AuthUser,
     error::{AppError, AppResult},
     metadata,
-    models::asset::{Asset, AssetWithCategories, CreateAssetRequest, UpdateAssetRequest},
+    models::asset::{Asset, AssetPage, AssetQuery, AssetWithCategories, CreateAssetRequest, UpdateAssetRequest},
     models::category::Category,
 };
 
@@ -186,32 +187,134 @@ pub const ASSET_COLUMNS: &str =
      team_id, custom_fields, \
      created_at, updated_at";
 
-// ── List all assets ───────────────────────────────────────────────────────────
+const PREFIXED_ASSET_COLUMNS: &str =
+    "a.id, a.owner_id, a.name, a.description, a.asset_type, a.size, a.storage_key, a.bucket, \
+     a.caption, a.keywords, a.creator, a.copyright_notice, a.available, a.available_until, \
+     a.is_locked, a.is_private, a.public_read, a.public_download, a.public_write, \
+     a.team_id, a.custom_fields, \
+     a.created_at, a.updated_at";
+
+// ── List assets (paginated, filtered, sorted) ─────────────────────────────────
 
 #[utoipa::path(
     get,
     path = "/assets",
     tag = "assets",
+    params(AssetQuery),
     responses(
-        (status = 200, description = "List of all assets", body = Vec<Asset>),
+        (status = 200, description = "Paginated asset list", body = AssetPage),
     )
 )]
-pub async fn list_assets(auth_user: AuthUser, State(state): State<AppState>) -> AppResult<Json<Vec<Asset>>> {
+pub async fn list_assets(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Query(params): Query<AssetQuery>,
+) -> AppResult<Json<AssetPage>> {
     auth_user.require_access()?;
+
+    let page = params.page.unwrap_or(1).max(1);
+    let per_page = params.per_page.unwrap_or(20).clamp(1, 200);
+    let offset = (page - 1) * per_page;
+    let q = params.q.filter(|s| !s.is_empty());
+
+    // Whitelist sort column and direction — never interpolate client strings directly.
+    let order_col = match params.sort_field.as_deref() {
+        Some("name") => "a.name",
+        Some("asset_type") => "a.asset_type",
+        Some("size") => "a.size",
+        _ => "a.created_at",
+    };
+    let order_dir = match params.sort_dir.as_deref() {
+        Some("asc") => "ASC",
+        _ => "DESC",
+    };
+
     let client = state.db.get().await?;
+
+    let sql = format!(
+        "SELECT {PREFIXED_ASSET_COLUMNS}, \
+         array_agg(ac.category_id) FILTER (WHERE ac.category_id IS NOT NULL) AS category_ids, \
+         COUNT(*) OVER () AS total_count \
+         FROM assets a \
+         LEFT JOIN asset_categories ac ON ac.asset_id = a.id \
+         WHERE (a.owner_id = $1 OR a.is_private = false) \
+           AND ($2::uuid IS NULL OR EXISTS ( \
+                 SELECT 1 FROM asset_categories ac2 \
+                 WHERE ac2.asset_id = a.id AND ac2.category_id = $2)) \
+           AND ($3::text IS NULL OR ( \
+                 a.name        ILIKE '%' || $3 || '%' \
+              OR a.caption     ILIKE '%' || $3 || '%' \
+              OR a.description ILIKE '%' || $3 || '%' \
+              OR a.keywords    ILIKE '%' || $3 || '%' \
+              OR a.creator     ILIKE '%' || $3 || '%')) \
+           AND ($4 IS NOT TRUE OR a.owner_id = $1) \
+         GROUP BY a.id \
+         ORDER BY {order_col} {order_dir} \
+         LIMIT $5 OFFSET $6"
+    );
+
     let rows = client
         .query(
-            &format!(
-                "SELECT {ASSET_COLUMNS} FROM assets \
-                 WHERE owner_id = $1 OR is_private = false \
-                 ORDER BY created_at DESC"
-            ),
-            &[&auth_user.user_id],
+            &sql,
+            &[
+                &auth_user.user_id,
+                &params.category_id,
+                &q,
+                &params.my_assets,
+                &per_page,
+                &offset,
+            ],
         )
         .await?;
 
-    let assets = rows.iter().map(Asset::from).collect();
-    Ok(Json(assets))
+    let total: i64 = rows.first().map(|r| r.get("total_count")).unwrap_or(0);
+
+    // Collect all distinct category IDs across this page in one pass.
+    let all_cat_ids: Vec<Uuid> = rows
+        .iter()
+        .flat_map(|r| {
+            let ids: Option<Vec<Uuid>> = r.get("category_ids");
+            ids.unwrap_or_default()
+        })
+        .collect::<HashSet<Uuid>>()
+        .into_iter()
+        .collect();
+
+    // Fetch all required categories in a single query.
+    let cat_map: HashMap<Uuid, Category> = if all_cat_ids.is_empty() {
+        HashMap::new()
+    } else {
+        client
+            .query(
+                "SELECT id, name, description, parent_id, creator, access_level, \
+                 owner_id, created_at, updated_at \
+                 FROM categories WHERE id = ANY($1)",
+                &[&all_cat_ids],
+            )
+            .await?
+            .iter()
+            .map(|r| {
+                let cat = Category::from(r);
+                (cat.id, cat)
+            })
+            .collect()
+    };
+
+    let items = rows
+        .iter()
+        .map(|r| {
+            let asset = Asset::from(r);
+            let cat_ids: Option<Vec<Uuid>> = r.get("category_ids");
+            let categories = cat_ids
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|id| cat_map.get(&id).cloned())
+                .collect();
+            AssetWithCategories { asset, categories }
+        })
+        .collect();
+
+    Ok(Json(AssetPage { items, total, page, per_page }))
 }
 
 // ── Get one asset with its categories ────────────────────────────────────────
