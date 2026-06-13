@@ -176,7 +176,7 @@ use crate::{
     auth::AuthUser,
     error::{AppError, AppResult},
     metadata,
-    models::asset::{Asset, AssetPage, AssetQuery, AssetWithCategories, CreateAssetRequest, UpdateAssetRequest},
+    models::asset::{Asset, AssetGeoPoint, AssetPage, AssetQuery, AssetWithCategories, CreateAssetRequest, GeoQuery, UpdateAssetRequest},
     models::category::Category,
 };
 
@@ -314,7 +314,7 @@ pub async fn list_assets(
                 .into_iter()
                 .filter_map(|id| cat_map.get(&id).cloned())
                 .collect();
-            AssetWithCategories { asset, categories }
+            AssetWithCategories { asset, categories, gps_lat: None, gps_lon: None, gps_alt: None }
         })
         .collect();
 
@@ -322,6 +322,72 @@ pub async fn list_assets(
 }
 
 // ── Get one asset with its categories ────────────────────────────────────────
+
+// ── GET /assets/geotagged ─────────────────────────────────────────────────────
+
+#[utoipa::path(
+    get,
+    path = "/assets/geotagged",
+    tag = "assets",
+    params(GeoQuery),
+    responses(
+        (status = 200, description = "GPS-tagged assets as lightweight map pins", body = Vec<AssetGeoPoint>),
+    )
+)]
+pub async fn list_geotagged(
+    auth_user: AuthUser,
+    State(state): State<AppState>,
+    Query(params): Query<GeoQuery>,
+) -> AppResult<Json<Vec<AssetGeoPoint>>> {
+    auth_user.require_access()?;
+    let client = state.db.get().await?;
+
+    let rows = client
+        .query(
+            "SELECT a.id, a.name, \
+                    (am.exif->>'gps_lat')::float8 AS gps_lat, \
+                    (am.exif->>'gps_lon')::float8 AS gps_lon, \
+                    (am.exif->>'gps_alt')::float8 AS gps_alt \
+             FROM assets a \
+             JOIN asset_metadata am ON am.asset_id = a.id \
+             WHERE am.exif IS NOT NULL \
+               AND am.exif ? 'gps_lat' \
+               AND am.exif ? 'gps_lon' \
+               AND (a.owner_id = $1 OR a.is_private = false) \
+               AND ($2::float8 IS NULL OR (am.exif->>'gps_lat')::float8 >= $2) \
+               AND ($3::float8 IS NULL OR (am.exif->>'gps_lat')::float8 <= $3) \
+               AND ($4::float8 IS NULL OR (am.exif->>'gps_lon')::float8 >= $4) \
+               AND ($5::float8 IS NULL OR (am.exif->>'gps_lon')::float8 <= $5) \
+               AND ($6::uuid IS NULL OR EXISTS ( \
+                     SELECT 1 FROM asset_categories ac \
+                     WHERE ac.asset_id = a.id AND ac.category_id = $6)) \
+             LIMIT 5000",
+            &[
+                &auth_user.user_id,
+                &params.lat_min,
+                &params.lat_max,
+                &params.lon_min,
+                &params.lon_max,
+                &params.category_id,
+            ],
+        )
+        .await?;
+
+    let points = rows
+        .iter()
+        .map(|r| AssetGeoPoint {
+            id: r.get("id"),
+            name: r.get("name"),
+            gps_lat: r.get("gps_lat"),
+            gps_lon: r.get("gps_lon"),
+            gps_alt: r.get("gps_alt"),
+        })
+        .collect();
+
+    Ok(Json(points))
+}
+
+// ── GET /assets/:id ───────────────────────────────────────────────────────────
 
 #[utoipa::path(
     get,
@@ -345,13 +411,24 @@ pub async fn get_asset(
 
     let row = client
         .query_opt(
-            &format!("SELECT {ASSET_COLUMNS} FROM assets WHERE id = $1"),
+            &format!(
+                "SELECT {ASSET_COLUMNS}, \
+                 (am.exif->>'gps_lat')::float8 AS gps_lat, \
+                 (am.exif->>'gps_lon')::float8 AS gps_lon, \
+                 (am.exif->>'gps_alt')::float8 AS gps_alt \
+                 FROM assets \
+                 LEFT JOIN asset_metadata am ON am.asset_id = assets.id \
+                 WHERE assets.id = $1"
+            ),
             &[&id],
         )
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Asset {id} not found")))?;
 
     let asset = Asset::from(&row);
+    let gps_lat: Option<f64> = row.get("gps_lat");
+    let gps_lon: Option<f64> = row.get("gps_lon");
+    let gps_alt: Option<f64> = row.get("gps_alt");
 
     let cat_rows = client
         .query(
@@ -365,7 +442,7 @@ pub async fn get_asset(
 
     let categories = cat_rows.iter().map(Category::from).collect();
 
-    Ok(Json(AssetWithCategories { asset, categories }))
+    Ok(Json(AssetWithCategories { asset, categories, gps_lat, gps_lon, gps_alt }))
 }
 
 // ── Create asset record (metadata only, no file yet) ─────────────────────────

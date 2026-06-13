@@ -71,6 +71,38 @@ pub struct AssetWithCategories {
     #[serde(flatten)]
     pub asset: Asset,
     pub categories: Vec<Category>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gps_lat: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gps_lon: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gps_alt: Option<f64>,
+}
+
+/// Lightweight GPS pin — returned by `GET /assets/geotagged` for map views.
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+pub struct AssetGeoPoint {
+    pub id: Uuid,
+    pub name: String,
+    pub gps_lat: f64,
+    pub gps_lon: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub gps_alt: Option<f64>,
+}
+
+/// Query parameters for `GET /assets/geotagged`.
+#[derive(Debug, Default, Deserialize, ToSchema, IntoParams)]
+pub struct GeoQuery {
+    /// Minimum latitude of bounding box (optional).
+    pub lat_min: Option<f64>,
+    /// Maximum latitude of bounding box (optional).
+    pub lat_max: Option<f64>,
+    /// Minimum longitude of bounding box (optional).
+    pub lon_min: Option<f64>,
+    /// Maximum longitude of bounding box (optional).
+    pub lon_max: Option<f64>,
+    /// Filter to assets linked to this category (UUID).
+    pub category_id: Option<Uuid>,
 }
 
 /// Query parameters for `GET /assets`.
