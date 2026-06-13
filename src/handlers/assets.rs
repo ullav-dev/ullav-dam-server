@@ -248,9 +248,12 @@ pub async fn list_assets(
               OR a.keywords    ILIKE '%' || $3 || '%' \
               OR a.creator     ILIKE '%' || $3 || '%')) \
            AND ($4 IS NOT TRUE OR a.owner_id = $1) \
+           AND ($5 IS NOT TRUE OR NOT EXISTS ( \
+                 SELECT 1 FROM asset_categories ac3 \
+                 WHERE ac3.asset_id = a.id)) \
          GROUP BY a.id \
          ORDER BY {order_col} {order_dir} \
-         LIMIT $5 OFFSET $6"
+         LIMIT $6 OFFSET $7"
     );
 
     let rows = client
@@ -261,6 +264,7 @@ pub async fn list_assets(
                 &params.category_id,
                 &q,
                 &params.my_assets,
+                &params.uncategorised,
                 &per_page,
                 &offset,
             ],

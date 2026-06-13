@@ -90,6 +90,8 @@ pub struct AssetQuery {
     pub page: Option<i64>,
     /// Items per page, 1–200 (default 20).
     pub per_page: Option<i64>,
+    /// When `true`, return only assets with no category assigned.
+    pub uncategorised: Option<bool>,
 }
 
 /// Paginated asset list returned by `GET /assets`.
