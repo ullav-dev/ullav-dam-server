@@ -76,6 +76,9 @@ tempfile = "3"
 # ZIP extraction for Apple iWork thumbnail extraction (Pages, Numbers, Keynote)
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
+# Embed migrations directory at compile time
+include_dir = "0.7"
+
 # EXIF metadata extraction (pure Rust)
 kamadak-exif = "0.5"
 

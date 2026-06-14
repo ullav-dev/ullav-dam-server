@@ -1,6 +1,9 @@
 use anyhow::{Context, Result};
 use deadpool_postgres::{Config as PgConfig, ManagerConfig, Pool, RecyclingMethod, Runtime};
+use include_dir::{include_dir, Dir};
 use tokio_postgres::NoTls;
+
+static MIGRATIONS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/migrations");
 
 pub type DbPool = Pool;
 
@@ -18,35 +21,17 @@ pub fn create_pool(database_url: &str) -> Result<Pool> {
 pub async fn run_migrations(pool: &Pool) -> Result<()> {
     let client = pool.get().await.context("Failed to get DB connection for migrations")?;
 
-    let sql = include_str!("../migrations/001_initial.sql");
-    client.batch_execute(sql).await.context("Failed to run migration 001")?;
+    let mut files: Vec<_> = MIGRATIONS_DIR.files().collect();
+    files.sort_by_key(|f| f.path());
 
-    let sql = include_str!("../migrations/002_asset_metadata_fields.sql");
-    client.batch_execute(sql).await.context("Failed to run migration 002")?;
-
-    let sql = include_str!("../migrations/003_asset_is_locked.sql");
-    client.batch_execute(sql).await.context("Failed to run migration 003")?;
-
-    let sql = include_str!("../migrations/004_asset_visibility.sql");
-    client.batch_execute(sql).await.context("Failed to run migration 004")?;
-
-    let sql = include_str!("../migrations/005_category_access_level_creator.sql");
-    client.batch_execute(sql).await.context("Failed to run migration 005")?;
-
-    let sql = include_str!("../migrations/006_owner_id.sql");
-    client.batch_execute(sql).await.context("Failed to run migration 006")?;
-
-    let sql = include_str!("../migrations/007_category_owner_id.sql");
-    client.batch_execute(sql).await.context("Failed to run migration 007")?;
-
-    let sql = include_str!("../migrations/008_delete_ownerless_categories.sql");
-    client.batch_execute(sql).await.context("Failed to run migration 008")?;
-
-    let sql = include_str!("../migrations/009_asset_metadata.sql");
-    client.batch_execute(sql).await.context("Failed to run migration 009")?;
-
-    let sql = include_str!("../migrations/010_custom_fields.sql");
-    client.batch_execute(sql).await.context("Failed to run migration 010")?;
+    for file in files {
+        let sql = file.contents_utf8().with_context(|| {
+            format!("Migration file is not valid UTF-8: {}", file.path().display())
+        })?;
+        client.batch_execute(sql).await.with_context(|| {
+            format!("Failed to run migration: {}", file.path().display())
+        })?;
+    }
 
     tracing::info!("Migrations applied successfully");
     Ok(())
