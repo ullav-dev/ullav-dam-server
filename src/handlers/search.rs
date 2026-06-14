@@ -4,6 +4,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
+use uuid::Uuid;
 
 use crate::{
     AppState,
@@ -56,6 +57,8 @@ pub struct SearchParams {
     pub taken_before: Option<String>,
     /// When `true`, return only assets that have GPS coordinates in their EXIF metadata.
     pub has_gps: Option<bool>,
+    /// Filter to assets belonging to this category (UUID).
+    pub category_id: Option<Uuid>,
     /// Maximum number of results to return (default: 50, max: 200).
     pub limit: Option<i64>,
     /// Pagination offset (default: 0).
@@ -115,8 +118,11 @@ pub async fn search_assets(
                    AND ($9::TEXT  IS NULL OR am.exif->>'datetime' >= $9) \
                    AND ($10::TEXT IS NULL OR am.exif->>'datetime' <= $10) \
                    AND ($11::BOOLEAN IS NULL OR NOT $11 OR (am.exif IS NOT NULL AND am.exif ? 'gps_lat')) \
+                   AND ($12::UUID IS NULL OR EXISTS \
+                        (SELECT 1 FROM asset_categories ac \
+                         WHERE ac.asset_id = a.id AND ac.category_id = $12)) \
                  ORDER BY a.created_at DESC \
-                 LIMIT $12 OFFSET $13",
+                 LIMIT $13 OFFSET $14",
                 ASSET_COLUMNS_PREFIXED = ASSET_COLUMNS
                     .split(", ")
                     .map(|c| format!("a.{c}"))
@@ -135,6 +141,7 @@ pub async fn search_assets(
                 &p.taken_after,
                 &p.taken_before,
                 &p.has_gps,
+                &p.category_id,
                 &limit,
                 &offset,
             ],

@@ -52,6 +52,7 @@ pub struct AppState {
     paths(
         health,
         handlers::assets::list_assets,
+        handlers::assets::list_geotagged,
         handlers::assets::get_asset,
         handlers::assets::create_asset,
         handlers::assets::upload_asset,
@@ -81,6 +82,10 @@ pub struct AppState {
     components(schemas(
         models::asset::Asset,
         models::asset::AssetWithCategories,
+        models::asset::AssetGeoPoint,
+        models::asset::AssetPage,
+        models::asset::AssetQuery,
+        models::asset::GeoQuery,
         models::asset::CreateAssetRequest,
         models::asset::UpdateAssetRequest,
         models::asset_metadata::AssetMetadata,
@@ -172,6 +177,7 @@ async fn main() -> Result<()> {
         // Search (must be before /assets/:id to avoid capture)
         .route("/assets/search", get(handlers::search::search_assets))
         .route("/assets/search/nearby", get(handlers::search::search_nearby))
+        .route("/assets/geotagged", get(handlers::assets::list_geotagged))
         // Assets
         .route("/usage", get(handlers::assets::get_usage))
         .route("/assets", get(handlers::assets::list_assets).post(handlers::assets::create_asset))
