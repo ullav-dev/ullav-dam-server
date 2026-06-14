@@ -345,6 +345,9 @@ mod tests {
         let awc = AssetWithCategories {
             asset: sample_asset(),
             categories: vec![],
+            gps_lat: None,
+            gps_lon: None,
+            gps_alt: None,
         };
         let json = serde_json::to_value(&awc).unwrap();
         // Flattened: asset fields appear at top level, not nested under "asset"
@@ -372,6 +375,9 @@ mod tests {
         let awc = AssetWithCategories {
             asset: sample_asset(),
             categories: vec![cat],
+            gps_lat: None,
+            gps_lon: None,
+            gps_alt: None,
         };
         let json = serde_json::to_value(&awc).unwrap();
         let cats = json["categories"].as_array().unwrap();
