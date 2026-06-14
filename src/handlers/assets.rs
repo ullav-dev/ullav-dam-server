@@ -180,11 +180,15 @@ use crate::{
     models::category::Category,
 };
 
+// ocr_text is intentionally absent from PREFIXED_ASSET_COLUMNS (the list SELECT)
+// to avoid shipping multi-KB OCR blobs on every paginated browse.
+// It IS present in ASSET_COLUMNS so that get_asset, update_asset, and the search
+// endpoints return/persist it.  Asset::from uses try_get so list rows don't panic.
 pub const ASSET_COLUMNS: &str =
     "id, owner_id, name, description, asset_type, size, storage_key, bucket, \
      caption, keywords, creator, copyright_notice, available, available_until, \
      is_locked, is_private, public_read, public_download, public_write, \
-     team_id, custom_fields, \
+     team_id, custom_fields, ocr_text, \
      created_at, updated_at";
 
 const PREFIXED_ASSET_COLUMNS: &str =
@@ -246,7 +250,8 @@ pub async fn list_assets(
               OR a.caption     ILIKE '%' || $3 || '%' \
               OR a.description ILIKE '%' || $3 || '%' \
               OR a.keywords    ILIKE '%' || $3 || '%' \
-              OR a.creator     ILIKE '%' || $3 || '%')) \
+              OR a.creator     ILIKE '%' || $3 || '%' \
+              OR a.ocr_text    ILIKE '%' || $3 || '%')) \
            AND ($4 IS NOT TRUE OR a.owner_id = $1) \
            AND ($5 IS NOT TRUE OR NOT EXISTS ( \
                  SELECT 1 FROM asset_categories ac3 \
@@ -726,6 +731,7 @@ pub async fn update_asset(
     let public_write = body.public_write.unwrap_or(current.public_write);
     let team_id = body.team_id.or(current.team_id);
     let custom_fields = body.custom_fields.or(current.custom_fields);
+    let ocr_text = body.ocr_text.or(current.ocr_text);
 
     // Validate team membership and custom field types if being set
     if let Some(tid) = &team_id {
@@ -743,8 +749,8 @@ pub async fn update_asset(
                      caption = $4, keywords = $5, creator = $6, copyright_notice = $7, \
                      available = $8, available_until = $9, is_locked = $10, \
                      is_private = $11, public_read = $12, public_download = $13, public_write = $14, \
-                     team_id = $15, custom_fields = $16 \
-                 WHERE id = $17 \
+                     team_id = $15, custom_fields = $16, ocr_text = $17 \
+                 WHERE id = $18 \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
@@ -752,7 +758,7 @@ pub async fn update_asset(
                 &caption, &keywords, &creator, &copyright_notice,
                 &available, &available_until, &is_locked,
                 &is_private, &public_read, &public_download, &public_write,
-                &team_id, &custom_fields,
+                &team_id, &custom_fields, &ocr_text,
                 &id,
             ],
         )
