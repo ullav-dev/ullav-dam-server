@@ -861,6 +861,8 @@ struct UploadAssetForm {
     team_id: Option<String>,
     /// Custom field values as a JSON object string (e.g. `{"project_code":"ARCH-2024"}`).
     custom_fields: Option<String>,
+    /// Full text extracted by OCR client-side before upload (e.g. via Vision framework).
+    ocr_text: Option<String>,
 }
 
 #[utoipa::path(
@@ -897,6 +899,7 @@ pub async fn create_and_upload_asset(
     let mut public_write: Option<bool> = None;
     let mut team_id: Option<String> = None;
     let mut custom_fields: Option<serde_json::Value> = None;
+    let mut ocr_text: Option<String> = None;
     let mut file_data: Option<bytes::Bytes> = None;
     let mut file_name: Option<String> = None;
     let mut content_type_hdr = "application/octet-stream".to_string();
@@ -922,7 +925,7 @@ pub async fn create_and_upload_asset(
             Some(key @ ("name" | "description" | "asset_type" | "caption" | "keywords"
                         | "creator" | "copyright_notice" | "available" | "available_until"
                         | "is_locked" | "is_private" | "public_read" | "public_download"
-                        | "public_write" | "team_id" | "custom_fields")) => {
+                        | "public_write" | "team_id" | "custom_fields" | "ocr_text")) => {
                 let v = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
                 if v.is_empty() {
                     continue;
@@ -970,6 +973,7 @@ pub async fn create_and_upload_asset(
                                 ))?,
                         );
                     }
+                    "ocr_text" => ocr_text = Some(v),
                     _ => {}
                 }
             }
@@ -1050,15 +1054,15 @@ pub async fn create_and_upload_asset(
                  (id, owner_id, name, description, asset_type, size, storage_key, bucket, \
                   caption, keywords, creator, copyright_notice, available, available_until, \
                   is_locked, is_private, public_read, public_download, public_write, \
-                  team_id, custom_fields) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
+                  team_id, custom_fields, ocr_text) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
                 &asset_id, &auth_user.user_id, &name, &description, &asset_type, &size, &storage_key, &state.storage.bucket,
                 &caption, &keywords, &creator, &copyright_notice, &available, &available_until,
                 &is_locked, &is_private, &public_read, &public_download, &public_write,
-                &team_id, &custom_fields,
+                &team_id, &custom_fields, &ocr_text,
             ],
         )
         .await?;
