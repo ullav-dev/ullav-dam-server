@@ -642,21 +642,33 @@ pub async fn download_asset(
 
     let row = client
         .query_opt(
-            "SELECT storage_key FROM assets WHERE id = $1",
+            "SELECT name, storage_key FROM assets WHERE id = $1",
             &[&id],
         )
         .await?
         .ok_or_else(|| AppError::NotFound(format!("Asset {id} not found")))?;
 
+    let asset_name: String = row.get("name");
     let storage_key: String = row.get("storage_key");
     let data = state.storage.download(&storage_key).await?;
+
+    let original_filename = storage_key.split('/').last().unwrap_or("file");
+    let ext = std::path::Path::new(original_filename)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    let download_filename = if ext.is_empty() {
+        asset_name.clone()
+    } else {
+        format!("{}.{}", asset_name, ext)
+    };
 
     let response = Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "application/octet-stream")
         .header(
             header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"{}\"", storage_key.split('/').last().unwrap_or("file")),
+            format!("attachment; filename=\"{}\"", download_filename),
         )
         .body(Body::from(data))
         .map_err(|e| AppError::Internal(e.into()))?;
