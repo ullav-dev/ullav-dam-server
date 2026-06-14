@@ -17,9 +17,10 @@ const CATEGORY_COLUMNS: &str =
     "id, name, description, parent_id, access_level, creator, owner_id, created_at, updated_at";
 
 const ASSET_COLUMNS: &str =
-    "id, name, description, asset_type, size, storage_key, bucket, \
+    "id, owner_id, name, description, asset_type, size, storage_key, bucket, \
      caption, keywords, creator, copyright_notice, available, available_until, \
-     is_locked, is_private, public_read, public_download, public_write, created_at, updated_at";
+     is_locked, is_private, public_read, public_download, public_write, \
+     team_id, custom_fields, created_at, updated_at";
 
 #[derive(Serialize)]
 pub struct ZipUploadResult {
@@ -251,12 +252,13 @@ pub async fn upload_zip(
             .query_one(
                 &format!(
                     "INSERT INTO assets \
-                     (id, name, asset_type, size, storage_key, bucket, creator, available, is_locked) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+                     (id, owner_id, name, asset_type, size, storage_key, bucket, creator, available, is_locked) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
                      RETURNING {ASSET_COLUMNS}"
                 ),
                 &[
                     &asset_id,
+                    &auth_user.user_id,
                     &asset_name,
                     &asset_type,
                     &size,
