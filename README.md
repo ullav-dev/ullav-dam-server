@@ -85,6 +85,8 @@ All endpoints require a JWT in the `Authorization: Bearer <token>` header, issue
 | DELETE | `/categories/:id` | Delete category |
 | GET | `/iiif/manifest/:id` | IIIF Presentation API 3.0 Manifest for a public asset (no auth required; private assets return 404) |
 | GET | `/iiif/collection/:id` | IIIF Presentation API 3.0 Collection for a non-private category (no auth required; Private categories return 404) |
+| GET | `/iiif/image/:id/info.json` | IIIF Image API 3.0 service description (Level 2, sizes-only) for a public raster image |
+| GET | `/iiif/image/:id/:region/:size/:rotation/:quality.format` | Parameterised image delivery per IIIF Image API 3.0 |
 
 ### Upload an asset (single request)
 
@@ -131,20 +133,38 @@ curl -X POST http://localhost:8080/zip/upload \
   -F "creator=colin"
 ```
 
-## IIIF Presentation API 3.0
+## IIIF Presentation API 3.0 + Image API 3.0
 
-Public assets and non-private categories are accessible as [IIIF](https://iiif.io) resources. Both endpoints require no authentication and return `application/ld+json` with `Access-Control-Allow-Origin: *` so any IIIF-compatible viewer can load them cross-origin.
+Public assets and non-private categories are accessible as [IIIF](https://iiif.io) resources. All IIIF endpoints require no authentication and return `Access-Control-Allow-Origin: *` so any IIIF-compatible viewer can load them cross-origin.
+
+### Presentation API 3.0
 
 | Endpoint | Returns |
 |----------|---------|
-| `GET /iiif/manifest/:id` | Manifest for a single public asset — includes label, metadata, thumbnail, and a painting Annotation pointing to the asset file |
-| `GET /iiif/collection/:id` | Collection for a non-Private category — includes manifest stubs for all public assets in the category and sub-collection stubs for child categories |
+| `GET /iiif/manifest/:id` | Manifest for a single public asset — includes label, metadata, thumbnail, and a painting Annotation; raster image assets include an `ImageService3` service reference enabling deep zoom |
+| `GET /iiif/collection/:id` | Collection for a non-Private category — includes manifest stubs for all public assets and sub-collection stubs for child categories |
 
 The manifest `id` field contains the fully-qualified canonical URL (derived from `PUBLIC_BASE_URL`). This is the URL to share with external viewers such as [Universal Viewer](https://universalviewer.io) or [Mirador](https://projectmirador.org).
 
-**Visibility rules** — Private assets return `404` (not `403`) from `/iiif/manifest/:id`. Private categories return `404` from `/iiif/collection/:id`. This prevents content enumeration by external viewers.
+### Image API 3.0 (Level 2)
 
-**Dimension backfill** — If an asset was uploaded before the `width`/`height` migration, dimensions are fetched from S3 on the first manifest request, decoded from the image header, and persisted so subsequent requests are fast.
+| Endpoint | Returns |
+|----------|---------|
+| `GET /iiif/image/:id/info.json` | Service description — `ImageService3`, `level2` profile, computed `sizes` (halved down to ≥ 128 px), `extraFormats: ["png", "webp"]` |
+| `GET /iiif/image/:id/{region}/{size}/{rotation}/{quality}.{format}` | Parameterised image delivery |
+
+**Parameters:**
+- **region** — `full` · `square` · `x,y,w,h` · `pct:x,y,w,h`
+- **size** — `max` · `w,` · `,h` · `w,h` · `!w,h` (best fit) · `pct:n` · prefix `^` to allow upscaling
+- **rotation** — `0` · `90` · `180` · `270`; prefix `!` for horizontal mirror (e.g. `!90`)
+- **quality** — `default` · `color` · `gray` · `bitonal`
+- **format** — `jpg` · `png` · `webp` (lossless)
+
+Image processing runs on a blocking thread (Lanczos3 filter). A pixel budget guard rejects images exceeding 50 MP.
+
+**Visibility rules** — Private assets return `404`; non-image assets (`image/svg+xml` included) return `501 Not Implemented`.
+
+**Dimension backfill** — If an asset was uploaded before the `width`/`height` migration, dimensions are fetched from S3 on the first manifest or `info.json` request, decoded from the image header, and persisted so subsequent requests are fast.
 
 ## Data Model
 

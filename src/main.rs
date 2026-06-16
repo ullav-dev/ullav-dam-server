@@ -81,6 +81,8 @@ pub struct AppState {
         handlers::custom_fields::delete_schema,
         handlers::iiif::get_manifest,
         handlers::iiif::get_collection,
+        handlers::iiif::get_image_info,
+        handlers::iiif::get_image,
     ),
     components(schemas(
         models::asset::Asset,
@@ -227,9 +229,14 @@ async fn main() -> Result<()> {
             put(handlers::custom_fields::update_schema)
                 .delete(handlers::custom_fields::delete_schema),
         )
-        // IIIF Presentation API 3.0
+        // IIIF Presentation API 3.0 + Image API 3.0
         .route("/iiif/manifest/:id", get(handlers::iiif::get_manifest))
         .route("/iiif/collection/:id", get(handlers::iiif::get_collection))
+        .route("/iiif/image/:id/info.json", get(handlers::iiif::get_image_info))
+        .route(
+            "/iiif/image/:id/:region/:size/:rotation/:quality_fmt",
+            get(handlers::iiif::get_image),
+        )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);
