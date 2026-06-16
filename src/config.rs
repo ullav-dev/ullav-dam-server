@@ -14,7 +14,7 @@ pub struct Config {
     pub thumbnail_cache_capacity: usize,
     pub jwt_secret: String,
     pub auth_service_url: String,
-    /// Canonical public URL of this server (e.g. `https://comad.ullav.com`).
+    /// Canonical public URL of this server (e.g. `https://comad-tip.stage.ullav.setanta.dev` for staging).
     /// Used to build absolute URIs in IIIF manifests. Required for IIIF to work;
     /// defaults to `http://localhost:8080` so local dev produces valid (local) manifests.
     pub public_base_url: String,

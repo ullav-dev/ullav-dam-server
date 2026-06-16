@@ -312,7 +312,7 @@ mod tests {
     use serde_json::json;
 
     fn sample_manifest() -> Value {
-        let base = "https://comad.ullav.com";
+        let base = "https://comad-tip.stage.ullav.setanta.dev";
         let id = "550e8400-e29b-41d4-a716-446655440000";
         let manifest_id = format!("{base}/iiif/manifest/{id}");
         let canvas_id = format!("{manifest_id}/canvas/1");
@@ -374,7 +374,7 @@ mod tests {
     }
 
     fn sample_collection() -> Value {
-        let base = "https://comad.ullav.com";
+        let base = "https://comad-tip.stage.ullav.setanta.dev";
         let id = "660e8400-e29b-41d4-a716-446655440000";
         json!({
             "@context": "http://iiif.io/api/presentation/3/context.json",
