@@ -40,6 +40,7 @@ pub struct AppState {
     pub jwt_secret: String,
     pub auth_service_url: String,
     pub auth_client: reqwest::Client,
+    pub public_base_url: String,
 }
 
 #[derive(OpenApi)]
@@ -78,6 +79,8 @@ pub struct AppState {
         handlers::custom_fields::create_schema,
         handlers::custom_fields::update_schema,
         handlers::custom_fields::delete_schema,
+        handlers::iiif::get_manifest,
+        handlers::iiif::get_collection,
     ),
     components(schemas(
         models::asset::Asset,
@@ -109,6 +112,7 @@ pub struct AppState {
         (name = "search", description = "Metadata-driven asset search"),
         (name = "categories", description = "Category management"),
         (name = "custom-fields", description = "Team custom field schema management"),
+        (name = "iiif", description = "IIIF Presentation API 3.0 manifests and collections"),
     )
 )]
 struct ApiDoc;
@@ -165,6 +169,7 @@ async fn main() -> Result<()> {
         jwt_secret: cfg.jwt_secret,
         auth_service_url: cfg.auth_service_url,
         auth_client: reqwest::Client::new(),
+        public_base_url: cfg.public_base_url,
     };
 
     let app = Router::new()
@@ -222,6 +227,9 @@ async fn main() -> Result<()> {
             put(handlers::custom_fields::update_schema)
                 .delete(handlers::custom_fields::delete_schema),
         )
+        // IIIF Presentation API 3.0
+        .route("/iiif/manifest/:id", get(handlers::iiif::get_manifest))
+        .route("/iiif/collection/:id", get(handlers::iiif::get_collection))
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())
         .with_state(state);

@@ -14,6 +14,10 @@ pub struct Config {
     pub thumbnail_cache_capacity: usize,
     pub jwt_secret: String,
     pub auth_service_url: String,
+    /// Canonical public URL of this server (e.g. `https://comad.ullav.com`).
+    /// Used to build absolute URIs in IIIF manifests. Required for IIIF to work;
+    /// defaults to `http://localhost:8080` so local dev produces valid (local) manifests.
+    pub public_base_url: String,
 }
 
 impl Config {
@@ -48,6 +52,13 @@ impl Config {
                 .context("JWT_SECRET is required")?,
             auth_service_url: std::env::var("AUTH_SERVICE_URL")
                 .unwrap_or_else(|_| "http://localhost:8081".into()),
+            public_base_url: std::env::var("PUBLIC_BASE_URL")
+                .or_else(|_| std::env::var("PUBLIC_BASE_URL_FILE")
+                    .ok()
+                    .and_then(|f| std::fs::read_to_string(f).ok())
+                    .map(|s| s.trim().to_string())
+                    .ok_or_else(|| std::env::VarError::NotPresent))
+                .unwrap_or_else(|_| "http://localhost:8080".into()),
         })
     }
 

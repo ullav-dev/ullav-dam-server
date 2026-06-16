@@ -188,14 +188,14 @@ pub const ASSET_COLUMNS: &str =
     "id, owner_id, name, description, asset_type, size, storage_key, bucket, \
      caption, keywords, creator, copyright_notice, available, available_until, \
      is_locked, is_private, public_read, public_download, public_write, \
-     team_id, custom_fields, ocr_text, \
+     team_id, custom_fields, ocr_text, width, height, \
      created_at, updated_at";
 
 const PREFIXED_ASSET_COLUMNS: &str =
     "a.id, a.owner_id, a.name, a.description, a.asset_type, a.size, a.storage_key, a.bucket, \
      a.caption, a.keywords, a.creator, a.copyright_notice, a.available, a.available_until, \
      a.is_locked, a.is_private, a.public_read, a.public_download, a.public_write, \
-     a.team_id, a.custom_fields, \
+     a.team_id, a.custom_fields, a.width, a.height, \
      a.created_at, a.updated_at";
 
 // ── List assets (paginated, filtered, sorted) ─────────────────────────────────
@@ -597,6 +597,8 @@ pub async fn upload_asset(
     auth_user.require_storage_quota(used_bytes - current_size, size)?;
 
     let data_for_meta = data.clone();
+    let dims = image_dimensions(&data);
+    let (img_width, img_height) = (dims.map(|d| d.0), dims.map(|d| d.1));
 
     state
         .storage
@@ -609,8 +611,8 @@ pub async fn upload_asset(
 
     let row = client
         .query_one(
-            &format!("UPDATE assets SET storage_key = $1, size = $2 WHERE id = $3 RETURNING {ASSET_COLUMNS}"),
-            &[&storage_key, &size, &id],
+            &format!("UPDATE assets SET storage_key = $1, size = $2, width = $3, height = $4 WHERE id = $5 RETURNING {ASSET_COLUMNS}"),
+            &[&storage_key, &size, &img_width, &img_height, &id],
         )
         .await?;
 
@@ -1043,6 +1045,8 @@ pub async fn create_and_upload_asset(
     }
 
     let data_for_meta = file_data.clone();
+    let dims = image_dimensions(&file_data);
+    let (img_width, img_height) = (dims.map(|d| d.0), dims.map(|d| d.1));
 
     // Upload first; on failure nothing is written to the DB
     state.storage.upload(&storage_key, file_data, &content_type_hdr).await?;
@@ -1054,15 +1058,15 @@ pub async fn create_and_upload_asset(
                  (id, owner_id, name, description, asset_type, size, storage_key, bucket, \
                   caption, keywords, creator, copyright_notice, available, available_until, \
                   is_locked, is_private, public_read, public_download, public_write, \
-                  team_id, custom_fields, ocr_text) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22) \
+                  team_id, custom_fields, ocr_text, width, height) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24) \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
                 &asset_id, &auth_user.user_id, &name, &description, &asset_type, &size, &storage_key, &state.storage.bucket,
                 &caption, &keywords, &creator, &copyright_notice, &available, &available_until,
                 &is_locked, &is_private, &public_read, &public_download, &public_write,
-                &team_id, &custom_fields, &ocr_text,
+                &team_id, &custom_fields, &ocr_text, &img_width, &img_height,
             ],
         )
         .await?;
@@ -1139,6 +1143,18 @@ pub async fn remove_category_from_asset(
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Image dimension extraction ────────────────────────────────────────────────
+
+/// Read pixel dimensions from raw image bytes by decoding only the image header.
+/// Returns `None` for non-image types or unrecognised formats.
+pub fn image_dimensions(data: &[u8]) -> Option<(i32, i32)> {
+    let reader = image::ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .ok()?;
+    let (w, h) = reader.into_dimensions().ok()?;
+    Some((w as i32, h as i32))
 }
 
 // ── Thumbnail ─────────────────────────────────────────────────────────────────

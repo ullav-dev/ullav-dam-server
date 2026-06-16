@@ -34,6 +34,9 @@ pub struct Asset {
     pub custom_fields: Option<JsonValue>,
     /// Full text extracted by OCR (Vision framework). Populated client-side after upload.
     pub ocr_text: Option<String>,
+    /// Pixel dimensions of the image (populated at upload time for raster images).
+    pub width: Option<i32>,
+    pub height: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -64,6 +67,8 @@ impl From<&Row> for Asset {
             custom_fields: row.get("custom_fields"),
             // try_get: safe when the column is absent from the SELECT (list query omits it)
             ocr_text: row.try_get("ocr_text").ok().flatten(),
+            width: row.try_get("width").ok().flatten(),
+            height: row.try_get("height").ok().flatten(),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -293,6 +298,8 @@ mod tests {
             team_id: None,
             custom_fields: None,
             ocr_text: None,
+            width: None,
+            height: None,
             created_at: now,
             updated_at: now,
         }
@@ -339,6 +346,8 @@ mod tests {
             team_id: None,
             custom_fields: None,
             ocr_text: None,
+            width: None,
+            height: None,
             created_at: now,
             updated_at: now,
         };
