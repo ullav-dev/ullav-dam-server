@@ -83,6 +83,8 @@ All endpoints require a JWT in the `Authorization: Bearer <token>` header, issue
 | GET | `/categories/:id` | Get category with sub-categories |
 | PUT | `/categories/:id` | Update category |
 | DELETE | `/categories/:id` | Delete category |
+| GET | `/iiif/manifest/:id` | IIIF Presentation API 3.0 Manifest for a public asset (no auth required; private assets return 404) |
+| GET | `/iiif/collection/:id` | IIIF Presentation API 3.0 Collection for a non-private category (no auth required; Private categories return 404) |
 
 ### Upload an asset (single request)
 
@@ -129,9 +131,24 @@ curl -X POST http://localhost:8080/zip/upload \
   -F "creator=colin"
 ```
 
+## IIIF Presentation API 3.0
+
+Public assets and non-private categories are accessible as [IIIF](https://iiif.io) resources. Both endpoints require no authentication and return `application/ld+json` with `Access-Control-Allow-Origin: *` so any IIIF-compatible viewer can load them cross-origin.
+
+| Endpoint | Returns |
+|----------|---------|
+| `GET /iiif/manifest/:id` | Manifest for a single public asset — includes label, metadata, thumbnail, and a painting Annotation pointing to the asset file |
+| `GET /iiif/collection/:id` | Collection for a non-Private category — includes manifest stubs for all public assets in the category and sub-collection stubs for child categories |
+
+The manifest `id` field contains the fully-qualified canonical URL (derived from `PUBLIC_BASE_URL`). This is the URL to share with external viewers such as [Universal Viewer](https://universalviewer.io) or [Mirador](https://projectmirador.org).
+
+**Visibility rules** — Private assets return `404` (not `403`) from `/iiif/manifest/:id`. Private categories return `404` from `/iiif/collection/:id`. This prevents content enumeration by external viewers.
+
+**Dimension backfill** — If an asset was uploaded before the `width`/`height` migration, dimensions are fetched from S3 on the first manifest request, decoded from the image header, and persisted so subsequent requests are fast.
+
 ## Data Model
 
-- **Asset** — `id`, `owner_id` (JWT `sub` of the uploader), `name`, `description`, `asset_type`, `size` (bytes), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default `true`), `available_until` (nullable timestamptz), `is_locked` (bool, default `false`), `is_private` (bool, default `true`), `public_read`/`public_download`/`public_write` (bool, default `false`), timestamps
+- **Asset** — `id`, `owner_id` (JWT `sub` of the uploader), `name`, `description`, `asset_type`, `size` (bytes), `storage_key`, `bucket`, `caption`, `keywords`, `creator`, `copyright_notice`, `available` (bool, default `true`), `available_until` (nullable timestamptz), `is_locked` (bool, default `false`), `is_private` (bool, default `true`), `public_read`/`public_download`/`public_write` (bool, default `false`), `width`/`height` (nullable int — pixel dimensions of raster images, populated at upload time; backfilled lazily on first IIIF manifest request), `ocr_text` (nullable text — full text extracted by the macOS client via Vision framework), timestamps
 - **Category** — `id`, `name`, `description`, `parent_id` (nullable self-FK for sub-categories), `access_level` (enum: `Private`/`Group`/`Global`, default `Private`), `creator` (nullable text — username of creator), timestamps. **Note**: any SQL query that SELECTs category rows and maps them through `Category::from` must include `creator` and `access_level` in the column list, or the handler will panic with an ECONNRESET at the client.
 - **asset_categories** — M2M junction table linking assets to categories
 
@@ -162,3 +179,4 @@ The image includes LibreOffice (Office thumbnail conversion) and a prebuilt PDFi
 | `THUMBNAIL_SIZE` | no | `256` | Max width/height of generated thumbnails (px) |
 | `PDFIUM_LIB_PATH` | no | system | Path to the PDFium shared library (`.so`/`.dylib`) for PDF thumbnails |
 | `SOFFICE_PATH` | no | `soffice` | Path to the LibreOffice binary for Office document thumbnails |
+| `PUBLIC_BASE_URL` | no | `http://localhost:8080` | Canonical public URL of this server — used to build absolute URIs in IIIF manifests and collections. Set to the externally reachable URL (e.g. `https://comad-tip.stage.ullav.setanta.dev`). Also readable from a Docker secret via `PUBLIC_BASE_URL_FILE`. |
