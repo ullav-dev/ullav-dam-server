@@ -104,7 +104,8 @@ pub async fn search_assets(
                    AND ($2::TEXT IS NULL \
                         OR a.name        ILIKE $2 \
                         OR a.caption     ILIKE $2 \
-                        OR a.description ILIKE $2) \
+                        OR a.description ILIKE $2 \
+                        OR a.ocr_text    ILIKE $2) \
                    AND ($3::TEXT IS NULL OR am.exif->>'camera_make'  ILIKE $3) \
                    AND ($4::TEXT IS NULL OR am.exif->>'camera_model' ILIKE $4) \
                    AND ($5::TEXT IS NULL \

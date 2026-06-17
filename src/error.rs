@@ -31,6 +31,9 @@ pub enum AppError {
     #[error("Storage error: {0}")]
     Storage(String),
 
+    #[error("Not implemented: {0}")]
+    NotImplemented(String),
+
     #[error("Internal error: {0}")]
     Internal(#[from] anyhow::Error),
 }
@@ -54,6 +57,7 @@ impl IntoResponse for AppError {
                 tracing::error!("Storage error: {msg}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Storage error".into())
             }
+            AppError::NotImplemented(msg) => (StatusCode::NOT_IMPLEMENTED, msg.clone()),
             AppError::Internal(e) => {
                 tracing::error!("Internal error: {e}");
                 (StatusCode::INTERNAL_SERVER_ERROR, "Internal server error".into())

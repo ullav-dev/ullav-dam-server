@@ -180,18 +180,22 @@ use crate::{
     models::category::Category,
 };
 
+// ocr_text is intentionally absent from PREFIXED_ASSET_COLUMNS (the list SELECT)
+// to avoid shipping multi-KB OCR blobs on every paginated browse.
+// It IS present in ASSET_COLUMNS so that get_asset, update_asset, and the search
+// endpoints return/persist it.  Asset::from uses try_get so list rows don't panic.
 pub const ASSET_COLUMNS: &str =
     "id, owner_id, name, description, asset_type, size, storage_key, bucket, \
      caption, keywords, creator, copyright_notice, available, available_until, \
      is_locked, is_private, public_read, public_download, public_write, \
-     team_id, custom_fields, \
+     team_id, custom_fields, ocr_text, width, height, \
      created_at, updated_at";
 
 const PREFIXED_ASSET_COLUMNS: &str =
     "a.id, a.owner_id, a.name, a.description, a.asset_type, a.size, a.storage_key, a.bucket, \
      a.caption, a.keywords, a.creator, a.copyright_notice, a.available, a.available_until, \
      a.is_locked, a.is_private, a.public_read, a.public_download, a.public_write, \
-     a.team_id, a.custom_fields, \
+     a.team_id, a.custom_fields, a.width, a.height, \
      a.created_at, a.updated_at";
 
 // ── List assets (paginated, filtered, sorted) ─────────────────────────────────
@@ -246,7 +250,8 @@ pub async fn list_assets(
               OR a.caption     ILIKE '%' || $3 || '%' \
               OR a.description ILIKE '%' || $3 || '%' \
               OR a.keywords    ILIKE '%' || $3 || '%' \
-              OR a.creator     ILIKE '%' || $3 || '%')) \
+              OR a.creator     ILIKE '%' || $3 || '%' \
+              OR a.ocr_text    ILIKE '%' || $3 || '%')) \
            AND ($4 IS NOT TRUE OR a.owner_id = $1) \
            AND ($5 IS NOT TRUE OR NOT EXISTS ( \
                  SELECT 1 FROM asset_categories ac3 \
@@ -592,6 +597,8 @@ pub async fn upload_asset(
     auth_user.require_storage_quota(used_bytes - current_size, size)?;
 
     let data_for_meta = data.clone();
+    let dims = image_dimensions(&data);
+    let (img_width, img_height) = (dims.map(|d| d.0), dims.map(|d| d.1));
 
     state
         .storage
@@ -604,8 +611,8 @@ pub async fn upload_asset(
 
     let row = client
         .query_one(
-            &format!("UPDATE assets SET storage_key = $1, size = $2 WHERE id = $3 RETURNING {ASSET_COLUMNS}"),
-            &[&storage_key, &size, &id],
+            &format!("UPDATE assets SET storage_key = $1, size = $2, width = $3, height = $4 WHERE id = $5 RETURNING {ASSET_COLUMNS}"),
+            &[&storage_key, &size, &img_width, &img_height, &id],
         )
         .await?;
 
@@ -726,6 +733,7 @@ pub async fn update_asset(
     let public_write = body.public_write.unwrap_or(current.public_write);
     let team_id = body.team_id.or(current.team_id);
     let custom_fields = body.custom_fields.or(current.custom_fields);
+    let ocr_text = body.ocr_text.or(current.ocr_text);
 
     // Validate team membership and custom field types if being set
     if let Some(tid) = &team_id {
@@ -743,8 +751,8 @@ pub async fn update_asset(
                      caption = $4, keywords = $5, creator = $6, copyright_notice = $7, \
                      available = $8, available_until = $9, is_locked = $10, \
                      is_private = $11, public_read = $12, public_download = $13, public_write = $14, \
-                     team_id = $15, custom_fields = $16 \
-                 WHERE id = $17 \
+                     team_id = $15, custom_fields = $16, ocr_text = $17 \
+                 WHERE id = $18 \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
@@ -752,7 +760,7 @@ pub async fn update_asset(
                 &caption, &keywords, &creator, &copyright_notice,
                 &available, &available_until, &is_locked,
                 &is_private, &public_read, &public_download, &public_write,
-                &team_id, &custom_fields,
+                &team_id, &custom_fields, &ocr_text,
                 &id,
             ],
         )
@@ -855,6 +863,8 @@ struct UploadAssetForm {
     team_id: Option<String>,
     /// Custom field values as a JSON object string (e.g. `{"project_code":"ARCH-2024"}`).
     custom_fields: Option<String>,
+    /// Full text extracted by OCR client-side before upload (e.g. via Vision framework).
+    ocr_text: Option<String>,
 }
 
 #[utoipa::path(
@@ -891,6 +901,7 @@ pub async fn create_and_upload_asset(
     let mut public_write: Option<bool> = None;
     let mut team_id: Option<String> = None;
     let mut custom_fields: Option<serde_json::Value> = None;
+    let mut ocr_text: Option<String> = None;
     let mut file_data: Option<bytes::Bytes> = None;
     let mut file_name: Option<String> = None;
     let mut content_type_hdr = "application/octet-stream".to_string();
@@ -916,7 +927,7 @@ pub async fn create_and_upload_asset(
             Some(key @ ("name" | "description" | "asset_type" | "caption" | "keywords"
                         | "creator" | "copyright_notice" | "available" | "available_until"
                         | "is_locked" | "is_private" | "public_read" | "public_download"
-                        | "public_write" | "team_id" | "custom_fields")) => {
+                        | "public_write" | "team_id" | "custom_fields" | "ocr_text")) => {
                 let v = field.text().await.map_err(|e| AppError::BadRequest(e.to_string()))?;
                 if v.is_empty() {
                     continue;
@@ -964,6 +975,7 @@ pub async fn create_and_upload_asset(
                                 ))?,
                         );
                     }
+                    "ocr_text" => ocr_text = Some(v),
                     _ => {}
                 }
             }
@@ -1033,6 +1045,8 @@ pub async fn create_and_upload_asset(
     }
 
     let data_for_meta = file_data.clone();
+    let dims = image_dimensions(&file_data);
+    let (img_width, img_height) = (dims.map(|d| d.0), dims.map(|d| d.1));
 
     // Upload first; on failure nothing is written to the DB
     state.storage.upload(&storage_key, file_data, &content_type_hdr).await?;
@@ -1044,15 +1058,15 @@ pub async fn create_and_upload_asset(
                  (id, owner_id, name, description, asset_type, size, storage_key, bucket, \
                   caption, keywords, creator, copyright_notice, available, available_until, \
                   is_locked, is_private, public_read, public_download, public_write, \
-                  team_id, custom_fields) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21) \
+                  team_id, custom_fields, ocr_text, width, height) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24) \
                  RETURNING {ASSET_COLUMNS}"
             ),
             &[
                 &asset_id, &auth_user.user_id, &name, &description, &asset_type, &size, &storage_key, &state.storage.bucket,
                 &caption, &keywords, &creator, &copyright_notice, &available, &available_until,
                 &is_locked, &is_private, &public_read, &public_download, &public_write,
-                &team_id, &custom_fields,
+                &team_id, &custom_fields, &ocr_text, &img_width, &img_height,
             ],
         )
         .await?;
@@ -1129,6 +1143,18 @@ pub async fn remove_category_from_asset(
         .await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Image dimension extraction ────────────────────────────────────────────────
+
+/// Read pixel dimensions from raw image bytes by decoding only the image header.
+/// Returns `None` for non-image types or unrecognised formats.
+pub fn image_dimensions(data: &[u8]) -> Option<(i32, i32)> {
+    let reader = image::ImageReader::new(Cursor::new(data))
+        .with_guessed_format()
+        .ok()?;
+    let (w, h) = reader.into_dimensions().ok()?;
+    Some((w as i32, h as i32))
 }
 
 // ── Thumbnail ─────────────────────────────────────────────────────────────────

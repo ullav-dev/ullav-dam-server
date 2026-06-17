@@ -32,6 +32,11 @@ pub struct Asset {
     pub team_id: Option<String>,
     /// User-defined custom field values keyed by field schema `key` slugs.
     pub custom_fields: Option<JsonValue>,
+    /// Full text extracted by OCR (Vision framework). Populated client-side after upload.
+    pub ocr_text: Option<String>,
+    /// Pixel dimensions of the image (populated at upload time for raster images).
+    pub width: Option<i32>,
+    pub height: Option<i32>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -60,6 +65,10 @@ impl From<&Row> for Asset {
             public_write: row.get("public_write"),
             team_id: row.get("team_id"),
             custom_fields: row.get("custom_fields"),
+            // try_get: safe when the column is absent from the SELECT (list query omits it)
+            ocr_text: row.try_get("ocr_text").ok().flatten(),
+            width: row.try_get("width").ok().flatten(),
+            height: row.try_get("height").ok().flatten(),
             created_at: row.get("created_at"),
             updated_at: row.get("updated_at"),
         }
@@ -186,6 +195,8 @@ pub struct UpdateAssetRequest {
     pub team_id: Option<String>,
     /// Replace all custom field values. Validated against the team's schemas.
     pub custom_fields: Option<JsonValue>,
+    /// Replace the OCR text. Set to populate; omit to leave unchanged.
+    pub ocr_text: Option<String>,
 }
 
 #[cfg(test)]
@@ -286,6 +297,9 @@ mod tests {
             public_write: false,
             team_id: None,
             custom_fields: None,
+            ocr_text: None,
+            width: None,
+            height: None,
             created_at: now,
             updated_at: now,
         }
@@ -331,6 +345,9 @@ mod tests {
             public_write: false,
             team_id: None,
             custom_fields: None,
+            ocr_text: None,
+            width: None,
+            height: None,
             created_at: now,
             updated_at: now,
         };
