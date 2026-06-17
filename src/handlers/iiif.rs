@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
+    auth::OptionalAuthUser,
     error::{AppError, AppResult},
     handlers::assets::image_dimensions,
 };
@@ -373,6 +374,7 @@ fn is_raster_image(asset_type: &str) -> bool {
 )]
 pub async fn get_manifest(
     State(state): State<AppState>,
+    auth: OptionalAuthUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
     let client = state.db.get().await?;
@@ -380,7 +382,7 @@ pub async fn get_manifest(
     let row = client
         .query_opt(
             "SELECT name, description, asset_type, caption, keywords, creator, \
-                    copyright_notice, is_private, width, height, storage_key \
+                    copyright_notice, is_private, owner_id, width, height, storage_key \
              FROM assets WHERE id = $1",
             &[&id],
         )
@@ -389,7 +391,14 @@ pub async fn get_manifest(
 
     let is_private: bool = row.get("is_private");
     if is_private {
-        return Err(AppError::NotFound(format!("Asset {id} not found")));
+        let owner_id: String = row.get("owner_id");
+        let authorized = auth.0
+            .as_ref()
+            .map(|u| u.user_id == owner_id || u.is_admin)
+            .unwrap_or(false);
+        if !authorized {
+            return Err(AppError::NotFound(format!("Asset {id} not found")));
+        }
     }
 
     let name: String = row.get("name");
@@ -652,13 +661,14 @@ pub async fn get_collection(
 )]
 pub async fn get_image_info(
     State(state): State<AppState>,
+    auth: OptionalAuthUser,
     Path(id): Path<Uuid>,
 ) -> AppResult<Response> {
     let client = state.db.get().await?;
 
     let row = client
         .query_opt(
-            "SELECT asset_type, is_private, width, height, storage_key FROM assets WHERE id = $1",
+            "SELECT asset_type, is_private, owner_id, width, height, storage_key FROM assets WHERE id = $1",
             &[&id],
         )
         .await?
@@ -666,7 +676,14 @@ pub async fn get_image_info(
 
     let is_private: bool = row.get("is_private");
     if is_private {
-        return Err(AppError::NotFound(format!("Asset {id} not found")));
+        let owner_id: String = row.get("owner_id");
+        let authorized = auth.0
+            .as_ref()
+            .map(|u| u.user_id == owner_id || u.is_admin)
+            .unwrap_or(false);
+        if !authorized {
+            return Err(AppError::NotFound(format!("Asset {id} not found")));
+        }
     }
 
     let asset_type: String = row.get("asset_type");
@@ -746,6 +763,7 @@ pub async fn get_image_info(
 )]
 pub async fn get_image(
     State(state): State<AppState>,
+    auth: OptionalAuthUser,
     Path((id, region_str, size_str, rotation_str, quality_fmt)): Path<(Uuid, String, String, String, String)>,
 ) -> AppResult<Response> {
     // Parse parameters early so we can return 400 before touching storage.
@@ -763,7 +781,7 @@ pub async fn get_image(
     let client = state.db.get().await?;
     let row = client
         .query_opt(
-            "SELECT asset_type, is_private, storage_key FROM assets WHERE id = $1",
+            "SELECT asset_type, is_private, owner_id, storage_key FROM assets WHERE id = $1",
             &[&id],
         )
         .await?
@@ -771,7 +789,14 @@ pub async fn get_image(
 
     let is_private: bool = row.get("is_private");
     if is_private {
-        return Err(AppError::NotFound(format!("Asset {id} not found")));
+        let owner_id: String = row.get("owner_id");
+        let authorized = auth.0
+            .as_ref()
+            .map(|u| u.user_id == owner_id || u.is_admin)
+            .unwrap_or(false);
+        if !authorized {
+            return Err(AppError::NotFound(format!("Asset {id} not found")));
+        }
     }
 
     let asset_type: String = row.get("asset_type");

@@ -268,6 +268,28 @@ impl AuthUser {
     }
 }
 
+// ── OptionalAuthUser extractor ────────────────────────────────────────────────
+
+/// Like `AuthUser` but never rejects the request. Returns `None` if the
+/// `Authorization` header is absent or invalid. Used by endpoints that are
+/// public by default but can also serve private resources to their owner.
+pub struct OptionalAuthUser(pub Option<AuthUser>);
+
+#[axum::async_trait]
+impl<S> FromRequestParts<S> for OptionalAuthUser
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        Ok(OptionalAuthUser(
+            AuthUser::from_request_parts(parts, state).await.ok(),
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
