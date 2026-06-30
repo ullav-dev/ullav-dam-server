@@ -12,12 +12,16 @@ pub struct Config {
     pub s3_region: String,
     pub thumbnail_size: u32,
     pub thumbnail_cache_capacity: usize,
-    pub jwt_secret: String,
+    pub oauth2_jwks_url: String,
+    pub oauth2_issuer: String,
     pub auth_service_url: String,
     /// Canonical public URL of this server (e.g. `https://comad-tip.stage.ullav.setanta.dev` for staging).
     /// Used to build absolute URIs in IIIF manifests. Required for IIIF to work;
     /// defaults to `http://localhost:8080` so local dev produces valid (local) manifests.
     pub public_base_url: String,
+    /// Canonical public URI of the DAM MCP endpoint — used as the OAuth2 audience.
+    /// Defaults to `http://localhost:8080/mcp`.
+    pub dam_mcp_canonical_uri: String,
 }
 
 impl Config {
@@ -48,8 +52,10 @@ impl Config {
                 .unwrap_or_else(|_| "512".into())
                 .parse()
                 .context("THUMBNAIL_CACHE_CAPACITY must be a positive integer")?,
-            jwt_secret: std::env::var("JWT_SECRET")
-                .context("JWT_SECRET is required")?,
+            oauth2_jwks_url: std::env::var("OAUTH2_JWKS_URL")
+                .unwrap_or_else(|_| "http://localhost:8081/oauth2/jwks".into()),
+            oauth2_issuer: std::env::var("OAUTH2_ISSUER")
+                .unwrap_or_else(|_| "http://localhost:8081".into()),
             auth_service_url: std::env::var("AUTH_SERVICE_URL")
                 .unwrap_or_else(|_| "http://localhost:8081".into()),
             public_base_url: std::env::var("PUBLIC_BASE_URL")
@@ -59,6 +65,8 @@ impl Config {
                     .map(|s| s.trim().to_string())
                     .ok_or_else(|| std::env::VarError::NotPresent))
                 .unwrap_or_else(|_| "http://localhost:8080".into()),
+            dam_mcp_canonical_uri: std::env::var("DAM_MCP_CANONICAL_URI")
+                .unwrap_or_else(|_| "http://localhost:8080/mcp".into()),
         })
     }
 
