@@ -2,7 +2,6 @@ use axum::{
     extract::{FromRef, FromRequestParts},
     http::{header, request::Parts},
 };
-use jsonwebtoken::{decode, DecodingKey, Validation};
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -149,13 +148,11 @@ where
             .strip_prefix("Bearer ")
             .ok_or_else(|| AppError::Unauthorized("Authorization must use Bearer scheme".into()))?;
 
-        let claims = decode::<Claims>(
-            token,
-            &DecodingKey::from_secret(app_state.jwt_secret.as_bytes()),
-            &Validation::default(),
-        )
-        .map(|d| d.claims)
-        .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
+        let claims = app_state
+            .api_validator
+            .validate_as::<Claims>(token)
+            .await
+            .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
 
         let (dam_access, asset_limit, storage_limit_bytes, category_limit) =
             resolve_dam_access(&claims.roles, &claims.subscriptions);
