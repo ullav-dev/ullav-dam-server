@@ -9,6 +9,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
+# Path dependency — checked out as a sibling in CI and copied here.
+COPY ullav-mcp-auth /ullav-mcp-auth
+
 # Cache dependencies before copying source
 COPY Cargo.toml Cargo.lock ./
 RUN mkdir src && echo 'fn main(){}' > src/main.rs
