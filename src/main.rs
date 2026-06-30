@@ -1,8 +1,10 @@
 use anyhow::Result;
 use axum::{
     Router,
-    extract::{DefaultBodyLimit, State},
-    http::StatusCode,
+    extract::{DefaultBodyLimit, Extension, State},
+    http::{Request, StatusCode},
+    middleware::{self, Next},
+    response::Response,
     routing::{get, post, put},
 };
 use bytes::Bytes;
@@ -15,12 +17,14 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilte
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
+use ullav_mcp_auth::{mcp_auth_middleware, protected_resource_metadata, McpClaims, ProtectedResourceConfig, TokenValidator};
 
 mod auth;
 mod config;
 mod db;
 mod error;
 mod handlers;
+mod mcp;
 mod metadata;
 mod models;
 mod storage;
@@ -37,10 +41,12 @@ pub struct AppState {
     pub storage: StorageClient,
     pub thumbnail_cache: ThumbnailCache,
     pub thumbnail_size: u32,
-    pub jwt_secret: String,
+    pub api_validator: ullav_mcp_auth::TokenValidator,
     pub auth_service_url: String,
     pub auth_client: reqwest::Client,
     pub public_base_url: String,
+    pub mcp_token_validator: TokenValidator,
+    pub mcp_prc: ProtectedResourceConfig,
 }
 
 #[derive(OpenApi)]
@@ -119,6 +125,19 @@ pub struct AppState {
 )]
 struct ApiDoc;
 
+fn host_from_uri(uri: &str) -> &str {
+    let without_scheme = uri.find("://").map(|i| &uri[i + 3..]).unwrap_or(uri);
+    without_scheme.split('/').next().unwrap_or(without_scheme)
+}
+
+async fn dam_scope_guard(req: Request<axum::body::Body>, next: Next) -> Result<Response, StatusCode> {
+    let claims = req.extensions().get::<McpClaims>().ok_or(StatusCode::UNAUTHORIZED)?;
+    if !claims.scope.split_whitespace().any(|s| s == "dam:tools") {
+        return Err(StatusCode::FORBIDDEN);
+    }
+    Ok(next.run(req).await)
+}
+
 /// Check service health (liveness + DB connectivity)
 #[utoipa::path(
     get,
@@ -161,17 +180,35 @@ async fn main() -> Result<()> {
 
     let addr: std::net::SocketAddr = cfg.bind_addr().parse()?;
 
+    let mcp_token_validator = TokenValidator::new(
+        cfg.oauth2_jwks_url.clone(),
+        cfg.oauth2_issuer.clone(),
+        cfg.dam_mcp_canonical_uri.clone(),
+    );
+    let mcp_prc = ProtectedResourceConfig {
+        resource_uri: cfg.dam_mcp_canonical_uri.clone(),
+        authorization_server: cfg.oauth2_issuer.clone(),
+        scopes_supported: vec!["mcp:tools".to_owned(), "dam:tools".to_owned()],
+        jwks_uri: cfg.oauth2_jwks_url.clone(),
+    };
+
     let state = AppState {
-        db: pool,
+        db: pool.clone(),
         storage,
         thumbnail_cache: Arc::new(Mutex::new(LruCache::new(
             NonZeroUsize::new(cfg.thumbnail_cache_capacity).unwrap_or(NonZeroUsize::new(512).unwrap()),
         ))),
         thumbnail_size: cfg.thumbnail_size,
-        jwt_secret: cfg.jwt_secret,
+        api_validator: ullav_mcp_auth::TokenValidator::new(
+            cfg.oauth2_jwks_url,
+            cfg.oauth2_issuer,
+            String::new(),
+        ),
         auth_service_url: cfg.auth_service_url,
         auth_client: reqwest::Client::new(),
         public_base_url: cfg.public_base_url,
+        mcp_token_validator: mcp_token_validator.clone(),
+        mcp_prc: mcp_prc.clone(),
     };
 
     let app = Router::new()
@@ -236,6 +273,21 @@ async fn main() -> Result<()> {
         .route(
             "/iiif/image/:id/:region/:size/:rotation/:quality_fmt",
             get(handlers::iiif::get_image),
+        )
+        // DAM MCP — audience-bound RS256 + dam:tools scope guard.
+        .merge(
+            Router::new()
+                .route_service("/mcp", mcp::make_dam_mcp_service(pool, host_from_uri(&cfg.dam_mcp_canonical_uri)))
+                .layer(middleware::from_fn(dam_scope_guard))
+                .layer(middleware::from_fn(mcp_auth_middleware))
+                .layer(Extension(mcp_token_validator))
+                .layer(Extension(mcp_prc.clone())),
+        )
+        // RFC 9728 protected resource metadata.
+        .merge(
+            Router::new()
+                .route("/.well-known/oauth-protected-resource/mcp", get(protected_resource_metadata))
+                .layer(Extension(mcp_prc)),
         )
         .layer(CorsLayer::permissive())
         .layer(TraceLayer::new_for_http())

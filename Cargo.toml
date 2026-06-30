@@ -58,8 +58,10 @@ utoipa-swagger-ui = { version = "7", features = ["axum"] }
 # MIME type inference
 mime_guess = "2"
 
-# JWT validation
-jsonwebtoken = "9"
+# JWT validation (RS256 via UUM JWKS) + MCP server
+ullav-mcp-auth = { path = "../ullav-mcp-auth", default-features = false, features = ["axum-07"] }
+rmcp = { version = "1.7.0", features = ["server", "transport-streamable-http-server", "transport-streamable-http-server-session", "macros"] }
+schemars = "1.0"
 
 # HTTP client (auth proxy)
 reqwest = { version = "0.12", features = ["json"] }
