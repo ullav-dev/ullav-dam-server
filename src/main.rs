@@ -188,7 +188,7 @@ async fn main() -> Result<()> {
     let mcp_prc = ProtectedResourceConfig {
         resource_uri: cfg.dam_mcp_canonical_uri.clone(),
         authorization_server: cfg.oauth2_issuer.clone(),
-        scopes_supported: vec!["mcp:tools".to_owned(), "dam:tools".to_owned()],
+        scopes_supported: vec!["dam:tools".to_owned()],
         jwks_uri: cfg.oauth2_jwks_url.clone(),
     };
 
