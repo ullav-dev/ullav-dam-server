@@ -331,15 +331,23 @@ impl DamServer {
         Ok(serde_json::to_string_pretty(&assets).unwrap())
     }
 
-    /// List all asset categories.
-    #[tool(description = "List all asset categories with their parent relationships")]
-    async fn list_categories(&self) -> Result<String, rmcp::ErrorData> {
+    /// List asset categories visible to the caller: their own (any access level)
+    /// plus other users' non-Private (Group/Global) categories.
+    #[tool(description = "List asset categories with their parent relationships — your own \
+        categories plus other users' non-Private (Group/Global) categories")]
+    async fn list_categories(
+        &self,
+        context: RequestContext<RoleServer>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let claims = caller_from_ctx(&context)?;
         let client = self.db.get().await.map_err(db_err)?;
 
         let rows = client
             .query(
-                "SELECT id, name, parent_id FROM categories ORDER BY name ASC",
-                &[],
+                "SELECT id, name, parent_id FROM categories \
+                 WHERE access_level != 'Private' OR owner_id = $1 \
+                 ORDER BY name ASC",
+                &[&claims.sub],
             )
             .await
             .map_err(db_err)?;
