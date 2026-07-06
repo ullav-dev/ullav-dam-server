@@ -280,6 +280,30 @@ impl DamServer {
         Ok(serde_json::to_string_pretty(&result).unwrap())
     }
 
+    /// Get just the OCR-extracted text for an asset, without the rest of its metadata.
+    #[tool(description = "Get the OCR-extracted text for a DAM asset (null if none was \
+        recorded). Lighter-weight than get_asset when you only need the recognized text.")]
+    async fn get_asset_ocr_text(
+        &self,
+        Parameters(p): Parameters<GetAssetParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let id = parse_uuid(&p.asset_id)?;
+        let client = self.db.get().await.map_err(db_err)?;
+
+        let row = client
+            .query_opt("SELECT ocr_text FROM assets WHERE id = $1", &[&id])
+            .await
+            .map_err(db_err)?
+            .ok_or_else(|| not_found("asset", &p.asset_id))?;
+
+        let result = serde_json::json!({
+            "asset_id": id,
+            "ocr_text": row.get::<_, Option<String>>("ocr_text"),
+        });
+
+        Ok(serde_json::to_string_pretty(&result).unwrap())
+    }
+
     /// List DAM assets, optionally filtered by category, ordered by most recently updated.
     #[tool(description = "List DAM assets, optionally filtered by category")]
     async fn list_assets(
@@ -528,6 +552,7 @@ impl rmcp::ServerHandler for DamServer {
              Use list_assets to browse assets (filter by category_id). \
              Use search_assets to find assets by name, caption, keywords, or OCR text. \
              Use get_asset for full detail on a specific asset. \
+             Use get_asset_ocr_text for just the OCR-extracted text of an asset. \
              Use create_category to create a new category, optionally nested under an \
              existing parent via a slash-separated path (e.g. \"a/b/c\"). \
              Use upload_asset to create a new asset from base64-encoded file content, \
