@@ -6,26 +6,27 @@
 ///
 /// Auth: audience-bound RS256 token validated by `mcp_auth_middleware` from
 /// ullav-mcp-auth, plus a `dam:tools` scope guard.
-
 use std::sync::Arc;
 
 use axum::http::request::Parts;
+use base64::Engine;
+use rmcp::transport::streamable_http_server::{
+    session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+};
 use rmcp::{
-    RoleServer,
     handler::server::wrapper::Parameters,
     model::{ServerCapabilities, ServerInfo},
     service::RequestContext,
-    tool, tool_handler, tool_router,
-};
-use rmcp::transport::streamable_http_server::{
-    StreamableHttpService, StreamableHttpServerConfig,
-    session::local::LocalSessionManager,
+    tool, tool_handler, tool_router, RoleServer,
 };
 use schemars::JsonSchema;
 use serde::Deserialize;
 use ullav_mcp_auth::McpClaims;
+use uuid::Uuid;
 
 use crate::db::DbPool;
+use crate::handlers::assets::image_dimensions;
+use crate::storage::StorageClient;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -78,22 +79,102 @@ pub struct ListAssetsParams {
     pub limit: Option<i64>,
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CreateCategoryParams {
+    /// Name of the new category.
+    pub name: String,
+    /// Slash-separated path to the parent category (e.g. "a/b/c"), walked from the
+    /// root by name. Every segment must already exist. Omit to create a top-level category.
+    pub parent_path: Option<String>,
+    pub description: Option<String>,
+    pub creator: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UploadAssetParams {
+    /// Name of the file, including extension (e.g. "photo.jpg"). Used as the asset
+    /// name if `name` is omitted, and to infer the MIME type if `asset_type` is omitted.
+    pub file_name: String,
+    /// Raw file bytes, base64-encoded.
+    pub file_base64: String,
+    /// Asset name — defaults to `file_name` if omitted.
+    pub name: Option<String>,
+    /// MIME type — inferred from `file_name`'s extension if omitted.
+    pub asset_type: Option<String>,
+    /// Slash-separated path to an existing category (e.g. "a/b/c") to file the asset
+    /// under, walked from the root by name. Every segment must already exist.
+    pub category_path: Option<String>,
+    pub description: Option<String>,
+    pub caption: Option<String>,
+    pub keywords: Option<String>,
+    pub creator: Option<String>,
+    pub copyright_notice: Option<String>,
+}
+
 // ── Server implementation ─────────────────────────────────────────────────────
 
 pub struct DamServer {
     db: DbPool,
+    storage: StorageClient,
 }
 
 impl DamServer {
-    fn new(db: DbPool) -> Self {
-        Self { db }
+    fn new(db: DbPool, storage: StorageClient) -> Self {
+        Self { db, storage }
     }
+}
+
+/// Walk a slash-separated category path (e.g. "a/b/c") from the root, matching each
+/// segment's `name` under the previous segment's `id` and scoped to `owner_id`.
+/// Returns the id of the final segment. Errors naming the first missing segment.
+async fn resolve_category_path(
+    client: &deadpool_postgres::Client,
+    owner_id: &str,
+    path: &str,
+) -> Result<uuid::Uuid, rmcp::ErrorData> {
+    let mut parent_id: Option<uuid::Uuid> = None;
+    let mut walked = String::new();
+
+    for segment in path.split('/').map(str::trim).filter(|s| !s.is_empty()) {
+        let row = client
+            .query_opt(
+                "SELECT id FROM categories WHERE name = $1 AND owner_id = $2
+                 AND parent_id IS NOT DISTINCT FROM $3",
+                &[&segment, &owner_id, &parent_id],
+            )
+            .await
+            .map_err(db_err)?;
+
+        let id: uuid::Uuid = row
+            .ok_or_else(|| {
+                let location = if walked.is_empty() {
+                    "at root".to_string()
+                } else {
+                    format!("under '{walked}'")
+                };
+                rmcp::ErrorData::invalid_params(
+                    format!("category '{segment}' not found {location}"),
+                    None,
+                )
+            })?
+            .get("id");
+
+        parent_id = Some(id);
+        if !walked.is_empty() {
+            walked.push('/');
+        }
+        walked.push_str(segment);
+    }
+
+    parent_id.ok_or_else(|| rmcp::ErrorData::invalid_params("empty category path", None))
 }
 
 #[tool_router]
 impl DamServer {
     /// Search DAM assets by name, caption, description, keywords, or OCR text.
-    #[tool(description = "Search digital assets by name, caption, description, keywords, or OCR text")]
+    #[tool(
+        description = "Search digital assets by name, caption, description, keywords, or OCR text"
+    )]
     async fn search_assets(
         &self,
         Parameters(p): Parameters<SearchAssetsParams>,
@@ -146,7 +227,9 @@ impl DamServer {
     }
 
     /// Get full details of a single DAM asset.
-    #[tool(description = "Get full details of a DAM asset including metadata, dimensions, and rights information")]
+    #[tool(
+        description = "Get full details of a DAM asset including metadata, dimensions, and rights information"
+    )]
     async fn get_asset(
         &self,
         Parameters(p): Parameters<GetAssetParams>,
@@ -206,10 +289,7 @@ impl DamServer {
     ) -> Result<String, rmcp::ErrorData> {
         let claims = caller_from_ctx(&context)?;
         let limit = p.limit.unwrap_or(20).min(100);
-        let category_id = p.category_id
-            .as_deref()
-            .map(parse_uuid)
-            .transpose()?;
+        let category_id = p.category_id.as_deref().map(parse_uuid).transpose()?;
         let client = self.db.get().await.map_err(db_err)?;
 
         let rows = client
@@ -277,22 +357,173 @@ impl DamServer {
 
         Ok(serde_json::to_string_pretty(&categories).unwrap())
     }
+
+    /// Create a new asset category, optionally nested under a parent path.
+    ///
+    /// NOTE: does not enforce plan-based category quotas — the MCP token carries no
+    /// subscription/tier information, unlike the REST API's `AuthUser` extractor.
+    #[tool(
+        description = "Create a new asset category. Optionally nest it under a parent \
+        category by specifying parent_path as a slash-separated path (e.g. \"a/b/c\") of \
+        existing category names walked from the root."
+    )]
+    async fn create_category(
+        &self,
+        Parameters(p): Parameters<CreateCategoryParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let claims = caller_from_ctx(&context)?;
+        let client = self.db.get().await.map_err(db_err)?;
+
+        let parent_id = match &p.parent_path {
+            Some(path) => Some(resolve_category_path(&client, &claims.sub, path).await?),
+            None => None,
+        };
+
+        let row = client
+            .query_one(
+                "INSERT INTO categories (name, description, parent_id, access_level, creator, owner_id)
+                 VALUES ($1, $2, $3, 'Private', $4, $5)
+                 RETURNING id, name, description, parent_id, access_level, creator, owner_id, created_at, updated_at",
+                &[&p.name, &p.description, &parent_id, &p.creator, &claims.sub],
+            )
+            .await
+            .map_err(db_err)?;
+
+        let result = serde_json::json!({
+            "id":          row.get::<_, uuid::Uuid>("id"),
+            "name":        row.get::<_, String>("name"),
+            "description": row.get::<_, Option<String>>("description"),
+            "parent_id":   row.get::<_, Option<uuid::Uuid>>("parent_id"),
+            "creator":     row.get::<_, Option<String>>("creator"),
+            "owner_id":    row.get::<_, String>("owner_id"),
+            "created_at":  row.get::<_, chrono::DateTime<chrono::Utc>>("created_at"),
+        });
+
+        Ok(serde_json::to_string_pretty(&result).unwrap())
+    }
+
+    /// Create a new asset and upload its file content in one call.
+    ///
+    /// NOTE: does not enforce plan-based asset/storage quotas or the images-only MIME
+    /// restriction — the MCP token carries no subscription/tier information, unlike the
+    /// REST API's `AuthUser` extractor.
+    #[tool(
+        description = "Create a new DAM asset by uploading file content (base64-encoded) \
+        directly. Optionally file it under an existing category by specifying category_path \
+        as a slash-separated path (e.g. \"a/b/c\") of existing category names walked from the root."
+    )]
+    async fn upload_asset(
+        &self,
+        Parameters(p): Parameters<UploadAssetParams>,
+        context: RequestContext<RoleServer>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let claims = caller_from_ctx(&context)?;
+        let client = self.db.get().await.map_err(db_err)?;
+
+        let category_id = match &p.category_path {
+            Some(path) => Some(resolve_category_path(&client, &claims.sub, path).await?),
+            None => None,
+        };
+
+        let file_data = base64::engine::general_purpose::STANDARD
+            .decode(p.file_base64.as_bytes())
+            .map_err(|e| {
+                rmcp::ErrorData::invalid_params(format!("invalid base64 in file_base64: {e}"), None)
+            })?;
+        let file_data = bytes::Bytes::from(file_data);
+
+        let name = p.name.unwrap_or_else(|| p.file_name.clone());
+        let asset_type = p.asset_type.unwrap_or_else(|| {
+            mime_guess::from_path(&p.file_name)
+                .first_or_octet_stream()
+                .to_string()
+        });
+
+        let asset_id = Uuid::new_v4();
+        let storage_key = format!("assets/{}/{}", asset_id, p.file_name);
+        let size = file_data.len() as i64;
+        let dims = image_dimensions(&file_data);
+        let (width, height) = (dims.map(|d| d.0), dims.map(|d| d.1));
+
+        self.storage
+            .upload(&storage_key, file_data, &asset_type)
+            .await
+            .map_err(|e| {
+                rmcp::ErrorData::internal_error(format!("storage upload failed: {e}"), None)
+            })?;
+
+        let row = client
+            .query_one(
+                "INSERT INTO assets
+                 (id, owner_id, name, description, asset_type, size, storage_key, bucket,
+                  caption, keywords, creator, copyright_notice, width, height)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+                 RETURNING id, name, description, asset_type, size, caption, keywords, creator,
+                           copyright_notice, width, height, created_at",
+                &[
+                    &asset_id,
+                    &claims.sub,
+                    &name,
+                    &p.description,
+                    &asset_type,
+                    &size,
+                    &storage_key,
+                    &self.storage.bucket,
+                    &p.caption,
+                    &p.keywords,
+                    &p.creator,
+                    &p.copyright_notice,
+                    &width,
+                    &height,
+                ],
+            )
+            .await
+            .map_err(db_err)?;
+
+        if let Some(category_id) = category_id {
+            client
+                .execute(
+                    "INSERT INTO asset_categories (asset_id, category_id) VALUES ($1, $2)
+                     ON CONFLICT DO NOTHING",
+                    &[&asset_id, &category_id],
+                )
+                .await
+                .map_err(db_err)?;
+        }
+
+        let result = serde_json::json!({
+            "id":               row.get::<_, uuid::Uuid>("id"),
+            "name":             row.get::<_, String>("name"),
+            "description":      row.get::<_, Option<String>>("description"),
+            "asset_type":       row.get::<_, String>("asset_type"),
+            "size":             row.get::<_, i64>("size"),
+            "caption":          row.get::<_, Option<String>>("caption"),
+            "keywords":         row.get::<_, Option<String>>("keywords"),
+            "creator":          row.get::<_, Option<String>>("creator"),
+            "copyright_notice": row.get::<_, Option<String>>("copyright_notice"),
+            "width":            row.get::<_, Option<i32>>("width"),
+            "height":           row.get::<_, Option<i32>>("height"),
+            "created_at":       row.get::<_, chrono::DateTime<chrono::Utc>>("created_at"),
+        });
+
+        Ok(serde_json::to_string_pretty(&result).unwrap())
+    }
 }
 
 #[tool_handler]
 impl rmcp::ServerHandler for DamServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
-            ServerCapabilities::builder()
-                .enable_tools()
-                .build(),
-        )
-        .with_instructions(
+        ServerInfo::new(ServerCapabilities::builder().enable_tools().build()).with_instructions(
             "DAM (Comad) MCP server — Digital Asset Management. \
              Use list_categories to browse the category tree. \
              Use list_assets to browse assets (filter by category_id). \
              Use search_assets to find assets by name, caption, keywords, or OCR text. \
-             Use get_asset for full detail on a specific asset.",
+             Use get_asset for full detail on a specific asset. \
+             Use create_category to create a new category, optionally nested under an \
+             existing parent via a slash-separated path (e.g. \"a/b/c\"). \
+             Use upload_asset to create a new asset from base64-encoded file content, \
+             optionally filed under an existing category via the same path syntax.",
         )
     }
 }
@@ -319,13 +550,18 @@ mod tests {
 
 pub fn make_dam_mcp_service(
     db: DbPool,
+    storage: StorageClient,
     external_host: &str,
 ) -> StreamableHttpService<DamServer, LocalSessionManager> {
     let session_manager = Arc::new(LocalSessionManager::default());
-    let config = StreamableHttpServerConfig::default()
-        .with_allowed_hosts(["localhost", "127.0.0.1", "::1", external_host]);
+    let config = StreamableHttpServerConfig::default().with_allowed_hosts([
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        external_host,
+    ]);
     StreamableHttpService::new(
-        move || Ok(DamServer::new(db.clone())),
+        move || Ok(DamServer::new(db.clone(), storage.clone())),
         session_manager,
         config,
     )
