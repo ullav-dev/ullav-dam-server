@@ -4,24 +4,20 @@ use axum::{
 };
 use serde::Deserialize;
 use std::collections::HashMap;
+use ullav_mcp_auth::{SubscriptionClaim, TeamClaim};
 
 use crate::{
     error::{AppError, AppResult},
     AppState,
 };
 
-// ── Subscription claim (matches ullav-user-management JWT structure) ──────────
-
-#[derive(Debug, Deserialize)]
-struct SubscriptionClaim {
-    pub tier: String,
-    pub status: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct TeamClaim {
-    pub role: String,
-}
+// ── Login/API JWT claims (matches ullav-user-management JWT structure) ────────
+//
+// `SubscriptionClaim`/`TeamClaim` are re-used from `ullav_mcp_auth` rather than
+// duplicated here — UUM embeds the identical shapes in both regular login/API
+// tokens (decoded below via `Claims`) and MCP OAuth2 access tokens (decoded by
+// `ullav_mcp_auth::McpClaims`), so `resolve_dam_access` works unmodified against
+// either token's claims.
 
 #[derive(Debug, Deserialize)]
 struct Claims {
@@ -79,7 +75,10 @@ pub struct AuthUser {
     pub teams: HashMap<String, String>,
 }
 
-fn resolve_dam_access(
+/// `pub(crate)` so `mcp::server` can build an `AuthUser`-equivalent directly from
+/// MCP token claims (`ullav_mcp_auth::McpClaims`), which carry the same
+/// roles/subscriptions shape as the REST API's login/API token `Claims`.
+pub(crate) fn resolve_dam_access(
     roles: &[String],
     subscriptions: &HashMap<String, SubscriptionClaim>,
 ) -> (DamAccess, Option<i64>, Option<i64>, Option<i64>) {
@@ -154,28 +153,42 @@ where
             .await
             .map_err(|e| AppError::Unauthorized(format!("Invalid token: {e}")))?;
 
-        let (dam_access, asset_limit, storage_limit_bytes, category_limit) =
-            resolve_dam_access(&claims.roles, &claims.subscriptions);
-
         let teams = claims
             .teams
             .into_iter()
             .map(|(id, claim)| (id, claim.role))
             .collect();
 
-        Ok(AuthUser {
-            user_id: claims.sub,
-            is_admin: claims.roles.iter().any(|r| r == "admin"),
+        Ok(AuthUser::from_claims(claims.sub, &claims.roles, &claims.subscriptions, teams))
+    }
+}
+
+impl AuthUser {
+    /// Build an `AuthUser` directly from already-decoded claims, for callers that
+    /// don't go through the `FromRequestParts` extractor — namely the MCP tool
+    /// handlers in `mcp::server`, which decode `ullav_mcp_auth::McpClaims` instead
+    /// of an HTTP `Authorization` header. Reuses `resolve_dam_access` so MCP and
+    /// REST callers get identical quota/access resolution.
+    pub(crate) fn from_claims(
+        user_id: String,
+        roles: &[String],
+        subscriptions: &HashMap<String, SubscriptionClaim>,
+        teams: HashMap<String, String>,
+    ) -> Self {
+        let (dam_access, asset_limit, storage_limit_bytes, category_limit) =
+            resolve_dam_access(roles, subscriptions);
+
+        AuthUser {
+            user_id,
+            is_admin: roles.iter().any(|r| r == "admin"),
             dam_access,
             asset_limit,
             storage_limit_bytes,
             category_limit,
             teams,
-        })
+        }
     }
-}
 
-impl AuthUser {
     /// Returns `Err(Forbidden)` if the user has no DAM access at all.
     pub fn require_access(&self) -> AppResult<()> {
         if self.dam_access == DamAccess::None {
@@ -315,6 +328,44 @@ mod tests {
             category_limit,
             teams: HashMap::new(),
         }
+    }
+
+    // ── AuthUser::from_claims ─────────────────────────────────────────────────
+
+    #[test]
+    fn from_claims_admin_role_gives_full_unlimited_access() {
+        let user = AuthUser::from_claims("u1".to_string(), &["admin".to_string()], &HashMap::new(), HashMap::new());
+        assert!(user.is_admin);
+        assert_eq!(user.dam_access, DamAccess::Full);
+        assert!(user.asset_limit.is_none());
+        assert!(user.storage_limit_bytes.is_none());
+        assert!(user.category_limit.is_none());
+    }
+
+    #[test]
+    fn from_claims_no_subscription_gives_no_access() {
+        let user = AuthUser::from_claims("u1".to_string(), &[], &HashMap::new(), HashMap::new());
+        assert!(!user.is_admin);
+        assert_eq!(user.dam_access, DamAccess::None);
+        assert_eq!(user.asset_limit, Some(0));
+    }
+
+    #[test]
+    fn from_claims_comad_individual_gives_images_only_with_limits() {
+        let subscriptions = subs(&[("comad", "individual", "active")]);
+        let user = AuthUser::from_claims("u1".to_string(), &[], &subscriptions, HashMap::new());
+        assert_eq!(user.dam_access, DamAccess::ImagesOnly);
+        assert_eq!(user.asset_limit, Some(500));
+        assert_eq!(user.storage_limit_bytes, Some(1024 * 1024 * 1024));
+        assert_eq!(user.category_limit, Some(50));
+    }
+
+    #[test]
+    fn from_claims_preserves_team_roles() {
+        let mut teams = HashMap::new();
+        teams.insert("team-1".to_string(), "owner".to_string());
+        let user = AuthUser::from_claims("u1".to_string(), &[], &HashMap::new(), teams);
+        assert_eq!(user.teams.get("team-1").map(String::as_str), Some("owner"));
     }
 
     // ── resolve_dam_access ────────────────────────────────────────────────────

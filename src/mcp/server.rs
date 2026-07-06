@@ -55,6 +55,26 @@ fn parse_uuid(s: &str) -> Result<uuid::Uuid, rmcp::ErrorData> {
         .map_err(|_| rmcp::ErrorData::invalid_params(format!("'{s}' is not a valid UUID"), None))
 }
 
+/// Build the same `AuthUser` the REST API's extractor builds, from MCP token
+/// claims instead of an HTTP `Authorization` header — so both surfaces enforce
+/// identical plan-based quota/access rules.
+fn auth_user_from_claims(claims: &McpClaims) -> crate::auth::AuthUser {
+    let teams = claims
+        .teams
+        .iter()
+        .map(|(id, claim)| (id.clone(), claim.role.clone()))
+        .collect();
+    crate::auth::AuthUser::from_claims(claims.sub.clone(), &claims.roles, &claims.subscriptions, teams)
+}
+
+/// Map guard-method failures (`AuthUser::require_*`) to an MCP tool error.
+fn app_err(e: crate::error::AppError) -> rmcp::ErrorData {
+    match e {
+        crate::error::AppError::Forbidden(msg) => rmcp::ErrorData::invalid_request(msg, None),
+        other => rmcp::ErrorData::internal_error(other.to_string(), None),
+    }
+}
+
 // ── Request parameter types ───────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -359,9 +379,6 @@ impl DamServer {
     }
 
     /// Create a new asset category, optionally nested under a parent path.
-    ///
-    /// NOTE: does not enforce plan-based category quotas — the MCP token carries no
-    /// subscription/tier information, unlike the REST API's `AuthUser` extractor.
     #[tool(
         description = "Create a new asset category. Optionally nest it under a parent \
         category by specifying parent_path as a slash-separated path (e.g. \"a/b/c\") of \
@@ -373,7 +390,19 @@ impl DamServer {
         context: RequestContext<RoleServer>,
     ) -> Result<String, rmcp::ErrorData> {
         let claims = caller_from_ctx(&context)?;
+        let auth_user = auth_user_from_claims(&claims);
+        auth_user.require_access().map_err(app_err)?;
         let client = self.db.get().await.map_err(db_err)?;
+
+        let count_row = client
+            .query_one(
+                "SELECT COUNT(*) AS cnt FROM categories WHERE owner_id = $1",
+                &[&claims.sub],
+            )
+            .await
+            .map_err(db_err)?;
+        let current_count: i64 = count_row.get("cnt");
+        auth_user.require_category_quota(current_count).map_err(app_err)?;
 
         let parent_id = match &p.parent_path {
             Some(path) => Some(resolve_category_path(&client, &claims.sub, path).await?),
@@ -404,10 +433,6 @@ impl DamServer {
     }
 
     /// Create a new asset and upload its file content in one call.
-    ///
-    /// NOTE: does not enforce plan-based asset/storage quotas or the images-only MIME
-    /// restriction — the MCP token carries no subscription/tier information, unlike the
-    /// REST API's `AuthUser` extractor.
     #[tool(
         description = "Create a new DAM asset by uploading file content (base64-encoded) \
         directly. Optionally file it under an existing category by specifying category_path \
@@ -419,6 +444,7 @@ impl DamServer {
         context: RequestContext<RoleServer>,
     ) -> Result<String, rmcp::ErrorData> {
         let claims = caller_from_ctx(&context)?;
+        let auth_user = auth_user_from_claims(&claims);
         let client = self.db.get().await.map_err(db_err)?;
 
         let category_id = match &p.category_path {
@@ -439,10 +465,31 @@ impl DamServer {
                 .first_or_octet_stream()
                 .to_string()
         });
+        auth_user.require_mime_allowed(&asset_type).map_err(app_err)?;
+
+        let count_row = client
+            .query_one(
+                "SELECT COUNT(*) AS n FROM assets WHERE owner_id = $1",
+                &[&claims.sub],
+            )
+            .await
+            .map_err(db_err)?;
+        let count: i64 = count_row.get("n");
+        auth_user.require_asset_quota(count).map_err(app_err)?;
+
+        let size = file_data.len() as i64;
+        let usage_row = client
+            .query_one(
+                "SELECT CAST(COALESCE(SUM(size), 0) AS BIGINT) AS used FROM assets WHERE owner_id = $1",
+                &[&claims.sub],
+            )
+            .await
+            .map_err(db_err)?;
+        let used_bytes: i64 = usage_row.get("used");
+        auth_user.require_storage_quota(used_bytes, size).map_err(app_err)?;
 
         let asset_id = Uuid::new_v4();
         let storage_key = format!("assets/{}/{}", asset_id, p.file_name);
-        let size = file_data.len() as i64;
         let dims = image_dimensions(&file_data);
         let (width, height) = (dims.map(|d| d.0), dims.map(|d| d.1));
 
@@ -543,6 +590,48 @@ mod tests {
     #[test]
     fn parse_uuid_accepts_valid() {
         assert!(parse_uuid("550e8400-e29b-41d4-a716-446655440000").is_ok());
+    }
+
+    // ── auth_user_from_claims (the REST↔MCP quota-enforcement bridge) ────────
+
+    fn mcp_claims_with_subscription(product: &str, tier: &str, status: &str) -> McpClaims {
+        let mut subscriptions = std::collections::HashMap::new();
+        subscriptions.insert(
+            product.to_string(),
+            ullav_mcp_auth::SubscriptionClaim { tier: tier.to_string(), status: status.to_string() },
+        );
+        McpClaims {
+            iss: "http://localhost:8081".into(),
+            sub: "user-1".into(),
+            aud: "http://localhost:8080/mcp".into(),
+            iat: 0,
+            exp: 0,
+            scope: "dam:tools".into(),
+            client_id: "claude".into(),
+            username: "testuser".into(),
+            roles: vec![],
+            subscriptions,
+            teams: std::collections::HashMap::new(),
+        }
+    }
+
+    #[test]
+    fn auth_user_from_claims_enforces_images_only_mime_restriction() {
+        let claims = mcp_claims_with_subscription("comad", "individual", "active");
+        let auth_user = auth_user_from_claims(&claims);
+
+        assert!(auth_user.require_mime_allowed("image/jpeg").is_ok());
+        assert!(auth_user.require_mime_allowed("video/mp4").is_err());
+        assert!(auth_user.require_asset_quota(0).is_ok());
+        assert!(auth_user.require_asset_quota(500).is_err(), "Individual plan asset limit is 500");
+    }
+
+    #[test]
+    fn auth_user_from_claims_blocks_writes_with_no_subscription() {
+        let claims = mcp_claims_with_subscription("comad", "individual", "cancelled");
+        let auth_user = auth_user_from_claims(&claims);
+
+        assert!(auth_user.require_access().is_err());
     }
 }
 
