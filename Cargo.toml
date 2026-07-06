@@ -89,6 +89,7 @@ img-parts = "0.3"
 
 # XMP XML parsing
 roxmltree = "0.20"
+base64 = "0.22.1"
 
 [profile.release]
 opt-level = 3

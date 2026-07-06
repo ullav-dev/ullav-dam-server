@@ -194,7 +194,7 @@ async fn main() -> Result<()> {
 
     let state = AppState {
         db: pool.clone(),
-        storage,
+        storage: storage.clone(),
         thumbnail_cache: Arc::new(Mutex::new(LruCache::new(
             NonZeroUsize::new(cfg.thumbnail_cache_capacity).unwrap_or(NonZeroUsize::new(512).unwrap()),
         ))),
@@ -277,7 +277,7 @@ async fn main() -> Result<()> {
         // DAM MCP — audience-bound RS256 + dam:tools scope guard.
         .merge(
             Router::new()
-                .route_service("/mcp", mcp::make_dam_mcp_service(pool, host_from_uri(&cfg.dam_mcp_canonical_uri)))
+                .route_service("/mcp", mcp::make_dam_mcp_service(pool, storage, host_from_uri(&cfg.dam_mcp_canonical_uri)))
                 .layer(middleware::from_fn(dam_scope_guard))
                 .layer(middleware::from_fn(mcp_auth_middleware))
                 .layer(Extension(mcp_token_validator))
