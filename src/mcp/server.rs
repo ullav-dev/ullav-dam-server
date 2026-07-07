@@ -72,6 +72,12 @@ pub struct GetAssetParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct DownloadAssetParams {
+    /// UUID of the asset.
+    pub asset_id: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct ListAssetsParams {
     /// Optional UUID of a category to filter by.
     pub category_id: Option<String>,
@@ -299,6 +305,45 @@ impl DamServer {
         let result = serde_json::json!({
             "asset_id": id,
             "ocr_text": row.get::<_, Option<String>>("ocr_text"),
+        });
+
+        Ok(serde_json::to_string_pretty(&result).unwrap())
+    }
+
+    /// Download the raw file content of a DAM asset, base64-encoded.
+    #[tool(description = "Download the raw file content of a DAM asset as base64-encoded bytes, \
+        along with its file name and MIME type. Note: response size scales with the asset's \
+        file size — prefer get_asset/get_asset_ocr_text when only metadata or text is needed.")]
+    async fn download_asset(
+        &self,
+        Parameters(p): Parameters<DownloadAssetParams>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let id = parse_uuid(&p.asset_id)?;
+        let client = self.db.get().await.map_err(db_err)?;
+
+        let row = client
+            .query_opt(
+                "SELECT name, asset_type, storage_key FROM assets WHERE id = $1",
+                &[&id],
+            )
+            .await
+            .map_err(db_err)?
+            .ok_or_else(|| not_found("asset", &p.asset_id))?;
+
+        let name: String = row.get("name");
+        let asset_type: String = row.get("asset_type");
+        let storage_key: String = row.get("storage_key");
+
+        let data = self.storage.download(&storage_key).await.map_err(|e| {
+            rmcp::ErrorData::internal_error(format!("storage download failed: {e}"), None)
+        })?;
+
+        let result = serde_json::json!({
+            "asset_id":    id,
+            "name":        name,
+            "asset_type":  asset_type,
+            "size":        data.len(),
+            "file_base64": base64::engine::general_purpose::STANDARD.encode(&data),
         });
 
         Ok(serde_json::to_string_pretty(&result).unwrap())
@@ -553,6 +598,7 @@ impl rmcp::ServerHandler for DamServer {
              Use search_assets to find assets by name, caption, keywords, or OCR text. \
              Use get_asset for full detail on a specific asset. \
              Use get_asset_ocr_text for just the OCR-extracted text of an asset. \
+             Use download_asset to fetch an asset's raw file content as base64. \
              Use create_category to create a new category, optionally nested under an \
              existing parent via a slash-separated path (e.g. \"a/b/c\"). \
              Use upload_asset to create a new asset from base64-encoded file content, \
