@@ -15,7 +15,7 @@ use rmcp::transport::streamable_http_server::{
 };
 use rmcp::{
     handler::server::wrapper::Parameters,
-    model::{ServerCapabilities, ServerInfo},
+    model::{CallToolResult, ServerCapabilities, ServerInfo},
     service::RequestContext,
     tool, tool_handler, tool_router, RoleServer,
 };
@@ -185,7 +185,7 @@ impl DamServer {
         &self,
         Parameters(p): Parameters<SearchAssetsParams>,
         context: RequestContext<RoleServer>,
-    ) -> Result<String, rmcp::ErrorData> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let claims = caller_from_ctx(&context)?;
         let limit = p.limit.unwrap_or(20).min(100);
         let pattern = format!("%{}%", p.query);
@@ -229,7 +229,7 @@ impl DamServer {
             })
             .collect();
 
-        Ok(serde_json::to_string_pretty(&assets).unwrap())
+        Ok(super::text_result(serde_json::to_string_pretty(&assets).unwrap(), serde_json::Value::Array(assets)))
     }
 
     /// Get full details of a single DAM asset.
@@ -239,7 +239,7 @@ impl DamServer {
     async fn get_asset(
         &self,
         Parameters(p): Parameters<GetAssetParams>,
-    ) -> Result<String, rmcp::ErrorData> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let id = parse_uuid(&p.asset_id)?;
         let client = self.db.get().await.map_err(db_err)?;
 
@@ -283,7 +283,7 @@ impl DamServer {
             "updated_at":       row.get::<_, chrono::DateTime<chrono::Utc>>("updated_at"),
         });
 
-        Ok(serde_json::to_string_pretty(&result).unwrap())
+        Ok(super::text_result(serde_json::to_string_pretty(&result).unwrap(), result))
     }
 
     /// Get just the OCR-extracted text for an asset, without the rest of its metadata.
@@ -292,7 +292,7 @@ impl DamServer {
     async fn get_asset_ocr_text(
         &self,
         Parameters(p): Parameters<GetAssetParams>,
-    ) -> Result<String, rmcp::ErrorData> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let id = parse_uuid(&p.asset_id)?;
         let client = self.db.get().await.map_err(db_err)?;
 
@@ -307,7 +307,7 @@ impl DamServer {
             "ocr_text": row.get::<_, Option<String>>("ocr_text"),
         });
 
-        Ok(serde_json::to_string_pretty(&result).unwrap())
+        Ok(super::text_result(serde_json::to_string_pretty(&result).unwrap(), result))
     }
 
     /// Download the raw file content of a DAM asset, base64-encoded.
@@ -317,7 +317,7 @@ impl DamServer {
     async fn download_asset(
         &self,
         Parameters(p): Parameters<DownloadAssetParams>,
-    ) -> Result<String, rmcp::ErrorData> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let id = parse_uuid(&p.asset_id)?;
         let client = self.db.get().await.map_err(db_err)?;
 
@@ -346,7 +346,7 @@ impl DamServer {
             "file_base64": base64::engine::general_purpose::STANDARD.encode(&data),
         });
 
-        Ok(serde_json::to_string_pretty(&result).unwrap())
+        Ok(super::text_result(serde_json::to_string_pretty(&result).unwrap(), result))
     }
 
     /// List DAM assets, optionally filtered by category, ordered by most recently updated.
@@ -355,7 +355,7 @@ impl DamServer {
         &self,
         Parameters(p): Parameters<ListAssetsParams>,
         context: RequestContext<RoleServer>,
-    ) -> Result<String, rmcp::ErrorData> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let claims = caller_from_ctx(&context)?;
         let limit = p.limit.unwrap_or(20).min(100);
         let category_id = p.category_id.as_deref().map(parse_uuid).transpose()?;
@@ -397,7 +397,7 @@ impl DamServer {
             })
             .collect();
 
-        Ok(serde_json::to_string_pretty(&assets).unwrap())
+        Ok(super::text_result(serde_json::to_string_pretty(&assets).unwrap(), serde_json::Value::Array(assets)))
     }
 
     /// List asset categories visible to the caller: their own (any access level)
@@ -407,7 +407,7 @@ impl DamServer {
     async fn list_categories(
         &self,
         context: RequestContext<RoleServer>,
-    ) -> Result<String, rmcp::ErrorData> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let claims = caller_from_ctx(&context)?;
         let client = self.db.get().await.map_err(db_err)?;
 
@@ -432,7 +432,7 @@ impl DamServer {
             })
             .collect();
 
-        Ok(serde_json::to_string_pretty(&categories).unwrap())
+        Ok(super::text_result(serde_json::to_string_pretty(&categories).unwrap(), serde_json::Value::Array(categories)))
     }
 
     /// Create a new asset category, optionally nested under a parent path.
@@ -448,7 +448,7 @@ impl DamServer {
         &self,
         Parameters(p): Parameters<CreateCategoryParams>,
         context: RequestContext<RoleServer>,
-    ) -> Result<String, rmcp::ErrorData> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let claims = caller_from_ctx(&context)?;
         let client = self.db.get().await.map_err(db_err)?;
 
@@ -477,7 +477,7 @@ impl DamServer {
             "created_at":  row.get::<_, chrono::DateTime<chrono::Utc>>("created_at"),
         });
 
-        Ok(serde_json::to_string_pretty(&result).unwrap())
+        Ok(super::text_result(serde_json::to_string_pretty(&result).unwrap(), result))
     }
 
     /// Create a new asset and upload its file content in one call.
@@ -494,7 +494,7 @@ impl DamServer {
         &self,
         Parameters(p): Parameters<UploadAssetParams>,
         context: RequestContext<RoleServer>,
-    ) -> Result<String, rmcp::ErrorData> {
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
         let claims = caller_from_ctx(&context)?;
         let client = self.db.get().await.map_err(db_err)?;
 
@@ -584,7 +584,7 @@ impl DamServer {
             "created_at":       row.get::<_, chrono::DateTime<chrono::Utc>>("created_at"),
         });
 
-        Ok(serde_json::to_string_pretty(&result).unwrap())
+        Ok(super::text_result(serde_json::to_string_pretty(&result).unwrap(), result))
     }
 }
 
